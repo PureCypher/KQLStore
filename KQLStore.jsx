@@ -636,7 +636,9 @@ function useKQLStorage() {
 
     // Handle both blob format and raw array
     if (incoming && typeof incoming === 'object' && !Array.isArray(incoming) && Array.isArray(incoming.queries)) {
-      incoming = incoming.queries;
+      // Run through migration if it's a versioned blob (handles v2->v3 category/table migration)
+      const migrated = migrateData(incoming);
+      incoming = migrated ? migrated.queries : incoming.queries;
     }
 
     if (!Array.isArray(incoming)) {
@@ -1437,7 +1439,8 @@ export default function KQLStore() {
       }
       let incoming = parsed.data;
       if (incoming && typeof incoming === 'object' && !Array.isArray(incoming) && Array.isArray(incoming.queries)) {
-        incoming = incoming.queries;
+        const migrated = migrateData(incoming);
+        incoming = migrated ? migrated.queries : incoming.queries;
       }
       if (!Array.isArray(incoming)) {
         addToast('Failed to import -- expected array of queries', 'error');

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kqlstore
+  namespace: kqlstore
+  labels:
+    app: kqlstore
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kqlstore
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: kqlstore

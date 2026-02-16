@@ -178,8 +178,8 @@ function validateQuery(query) {
 
   // description (optional)
   if (query.description !== undefined && query.description !== null) {
-    if (typeof query.description !== 'string' || query.description.length > 1000) {
-      errors.push('description must be a string of 0-1000 characters');
+    if (typeof query.description !== 'string' || query.description.length > 10000) {
+      errors.push('description must be a string of 0-10000 characters');
     } else {
       sanitized.description = query.description;
     }
@@ -1952,8 +1952,8 @@ export default function KQLStore() {
             </div>
             <div>
               <label className="text-xs text-gray-500 mb-1 block">Description</label>
-              <textarea className={inputCls} style={inputSty} rows={2}
-                value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} placeholder="Brief description..." />
+              <textarea className={inputCls} style={{ ...inputSty, resize: 'vertical' }} rows={6}
+                value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} placeholder="Describe what this query does, its use cases, and any relevant context..." />
             </div>
             <div>
               <label className="text-xs text-gray-500 mb-1 block">KQL Query *</label>
@@ -2133,7 +2133,7 @@ export default function KQLStore() {
       React.createElement('div', {
         style: {
           position: 'relative',
-          maxHeight: !expanded && needsTruncation ? `${22 * maxCollapsedLines + 4}px` : '2000px',
+          maxHeight: !expanded && needsTruncation ? `${22 * maxCollapsedLines + 4}px` : 'none',
           overflow: 'hidden',
           transition: 'max-height 0.3s ease',
         },

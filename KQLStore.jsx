@@ -332,82 +332,170 @@ function createOperationLogger() {
 const operationLog = createOperationLogger();
 
 // ============================================================
-// Storage Adapter (FIXES Finding 1, 2, 3, 4, 7)
-// The ONLY code that touches window.storage directly.
-// - Finding 1: Extracts .value from {key, value, shared} response
-// - Finding 2: Every call passes shared=false explicitly
-// - Finding 3: All operations wrapped in try/catch
-// - Finding 4: Errors propagated, never silently swallowed
-// - Finding 7: localStorage fallback returns string directly
+// Storage Adapter — API-first with localStorage cache
+// Source of truth: REST API (/api/queries)
+// Fast path: localStorage cache for instant loads + offline resilience
 // ============================================================
+const API_BASE = '/api';
+const API_RETRY_INTERVAL_MS = 30000;
+
 const StorageAdapter = {
+  // ---- API methods (source of truth) ----
+
+  async fetchAll() {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries`);
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_FETCH_ALL', key: 'queries', success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_FETCH_ALL', key: 'queries', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async createQuery(query) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_CREATE', key: query.id, success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_CREATE', key: query.id, success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async updateQuery(id, query) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_UPDATE', key: id, success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_UPDATE', key: id, success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async deleteQuery(id) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      operationLog.add({ type: 'API_DELETE', key: id, success: true, latencyMs: Date.now() - start });
+    } catch (e) {
+      operationLog.add({ type: 'API_DELETE', key: id, success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async importQueries(queries) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_IMPORT', key: 'bulk', success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_IMPORT', key: 'bulk', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async exportQueries() {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/queries/export`);
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_EXPORT', key: 'bulk', success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_EXPORT', key: 'bulk', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async healthCheck() {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      operationLog.add({ type: 'API_HEALTH', key: 'health', success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_HEALTH', key: 'health', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  // ---- localStorage cache methods (fast path + offline) ----
+
+  getCachedData() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = safeJsonParse(raw);
+      if (parsed.ok && parsed.data) {
+        const migrated = migrateData(parsed.data);
+        return migrated;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
+  setCachedData(blob) {
+    try {
+      localStorage.setItem(STORAGE_KEY, typeof blob === 'string' ? blob : JSON.stringify(blob));
+    } catch {
+      // Cache write failure is non-critical
+    }
+  },
+
+  deleteCachedData() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(BACKUP_KEY);
+    } catch {
+      // Cache clear failure is non-critical
+    }
+  },
+
+  // Legacy methods kept for backup and health test operations
   async get(key) {
-    const start = Date.now();
-    try {
-      let value;
-      if (typeof window !== 'undefined' && window.storage) {
-        // FIX Finding 1: extract .value from response object
-        // FIX Finding 2: explicit shared=false
-        const result = await window.storage.get(key, false);
-        value = result?.value ?? null;
-      } else {
-        // FIX Finding 7: localStorage returns string directly
-        value = localStorage.getItem(key);
-      }
-      operationLog.add({ type: 'GET', key, success: true, latencyMs: Date.now() - start });
-      return value;
-    } catch (e) {
-      operationLog.add({ type: 'GET', key, success: false, latencyMs: Date.now() - start, error: e.message });
-      throw e;
-    }
+    return localStorage.getItem(key);
   },
-
   async set(key, value) {
-    const start = Date.now();
-    try {
-      if (typeof window !== 'undefined' && window.storage) {
-        await window.storage.set(key, value, false); // FIX Finding 2: explicit shared=false
-      } else {
-        localStorage.setItem(key, value);
-      }
-      operationLog.add({ type: 'SET', key, success: true, latencyMs: Date.now() - start, sizeBytes: typeof value === 'string' ? value.length : 0 });
-    } catch (e) {
-      operationLog.add({ type: 'SET', key, success: false, latencyMs: Date.now() - start, error: e.message });
-      throw e;
-    }
+    localStorage.setItem(key, value);
   },
-
   async delete(key) {
-    const start = Date.now();
-    try {
-      if (typeof window !== 'undefined' && window.storage) {
-        await window.storage.delete(key, false); // FIX Finding 2: explicit shared=false
-      } else {
-        localStorage.removeItem(key);
-      }
-      operationLog.add({ type: 'DELETE', key, success: true, latencyMs: Date.now() - start });
-    } catch (e) {
-      operationLog.add({ type: 'DELETE', key, success: false, latencyMs: Date.now() - start, error: e.message });
-      throw e;
-    }
+    localStorage.removeItem(key);
   },
-
   async list(prefix) {
-    const start = Date.now();
-    try {
-      let keys;
-      if (typeof window !== 'undefined' && window.storage) {
-        const result = await window.storage.list(prefix, false); // FIX Finding 2: explicit shared=false
-        keys = result?.keys ?? [];
-      } else {
-        keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix));
-      }
-      operationLog.add({ type: 'LIST', key: prefix || '*', success: true, latencyMs: Date.now() - start });
-      return keys;
-    } catch (e) {
-      operationLog.add({ type: 'LIST', key: prefix || '*', success: false, latencyMs: Date.now() - start, error: e.message });
-      throw e;
-    }
+    return Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix));
   },
 };
 
@@ -429,6 +517,8 @@ function useKQLStorage() {
   const lastBackupRef = useRef(0);
   const pendingSaveRef = useRef(null);
   const queriesRef = useRef(queries);
+  const apiAvailableRef = useRef(false);
+  const retryIntervalRef = useRef(null);
 
   // Keep ref in sync
   useEffect(() => {
@@ -447,7 +537,7 @@ function useKQLStorage() {
     });
   }, []);
 
-  // Write backup (throttled) — FIX Finding 6: auto-backup mechanism
+  // Write backup (throttled)
   const writeBackup = useCallback(async (blob) => {
     const now = Date.now();
     if (now - lastBackupRef.current < BACKUP_THROTTLE_MS) return;
@@ -460,120 +550,136 @@ function useKQLStorage() {
     }
   }, []);
 
-  // Core persist function (debounced) — FIX Finding 8: prevents rapid sequential writes
+  // Update localStorage cache (debounced) — cache only, API calls happen directly in saveQuery/deleteQuery
   const persistQueries = useCallback((queryList) => {
     pendingSaveRef.current = queryList;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    setSavingState('saving');
-    saveTimerRef.current = setTimeout(async () => {
+    saveTimerRef.current = setTimeout(() => {
       const toSave = pendingSaveRef.current;
       if (!toSave) return;
       pendingSaveRef.current = null;
       try {
         const blob = buildBlob(toSave);
-        await StorageAdapter.set(STORAGE_KEY, blob);
-        setLastSavedTimestamp(new Date().toISOString());
-        setSavingState('saved');
-        setError(null);
-        // Auto-backup (throttled)
+        StorageAdapter.setCachedData(blob);
         writeBackup(blob);
-        // Reset to idle after brief display
-        setTimeout(() => setSavingState((s) => s === 'saved' ? 'idle' : s), 2000);
-      } catch (e) {
-        setSavingState('error');
-        setError('Failed to save: ' + e.message);
+      } catch {
+        // Cache write failure is non-critical
       }
     }, SAVE_DEBOUNCE_MS);
   }, [buildBlob, writeBackup]);
 
-  // Load data from storage — FIX Finding 6: 4-tier recovery cascade
-  // Tier 1: Primary key → Tier 2: Backup key → Tier 3: Legacy keys → Tier 4: Empty state
+  // Sync all local data to API (used when API comes back online)
+  const syncToApi = useCallback(async () => {
+    try {
+      const current = queriesRef.current;
+      if (current.length > 0) {
+        await StorageAdapter.importQueries(current);
+      }
+      // Re-fetch from API to get the merged state
+      const apiQueries = await StorageAdapter.fetchAll();
+      setQueries(apiQueries);
+      const blob = buildBlob(apiQueries);
+      StorageAdapter.setCachedData(blob);
+      apiAvailableRef.current = true;
+    } catch {
+      // Sync failed, will retry later
+    }
+  }, [buildBlob]);
+
+  // Load data: cache first (instant), then API (source of truth)
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    let loaded = false;
 
-    // Tier 1: Try primary key
+    // Step 1: Load from localStorage cache for instant display
+    const cached = StorageAdapter.getCachedData();
+    if (cached && Array.isArray(cached.queries)) {
+      setQueries(cached.queries);
+      setLastSavedTimestamp(cached.meta?.lastUpdated || null);
+    }
+
+    // Step 2: Fetch from API (source of truth)
     try {
-      const raw = await StorageAdapter.get(STORAGE_KEY);
-      if (raw !== null && raw !== undefined) {
-        const parsed = safeJsonParse(raw);
-        if (parsed.ok && parsed.data) {
-          const migrated = migrateData(parsed.data);
-          if (migrated && Array.isArray(migrated.queries)) {
-            setQueries(migrated.queries);
-            setLastSavedTimestamp(migrated.meta?.lastUpdated || null);
-            loaded = true;
-            // Re-save if migration changed the schema
-            if (parsed.data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-              await StorageAdapter.set(STORAGE_KEY, JSON.stringify(migrated));
-            }
-          }
-        }
-      }
+      const apiQueries = await StorageAdapter.fetchAll();
+      setQueries(apiQueries);
+      setLastSavedTimestamp(new Date().toISOString());
+      apiAvailableRef.current = true;
+      // Update cache with API data
+      const blob = buildBlob(apiQueries);
+      StorageAdapter.setCachedData(blob);
     } catch {
-      // Primary read failed, try backup
-    }
-
-    // Tier 2: Try backup if primary failed
-    if (!loaded) {
-      try {
-        const backupRaw = await StorageAdapter.get(BACKUP_KEY);
-        if (backupRaw !== null && backupRaw !== undefined) {
-          const parsed = safeJsonParse(backupRaw);
-          if (parsed.ok && parsed.data) {
-            const migrated = migrateData(parsed.data);
-            if (migrated && Array.isArray(migrated.queries) && migrated.queries.length > 0) {
-              setQueries(migrated.queries);
-              setLastSavedTimestamp(migrated.meta?.lastUpdated || null);
-              setError('Primary data was unavailable. Loaded from backup.');
-              loaded = true;
-              // Restore primary from backup
-              try {
-                await StorageAdapter.set(STORAGE_KEY, JSON.stringify(migrated));
-              } catch { /* non-critical */ }
+      apiAvailableRef.current = false;
+      // API unreachable — keep using cached data (already set above)
+      if (!cached || !cached.queries || cached.queries.length === 0) {
+        // Try legacy fallback if no cache
+        try {
+          const legacyRaw = localStorage.getItem('kql-store-queries');
+          if (legacyRaw) {
+            const parsed = safeJsonParse(legacyRaw);
+            if (parsed.ok && Array.isArray(parsed.data)) {
+              setQueries(parsed.data);
+              StorageAdapter.setCachedData(buildBlob(parsed.data));
             }
           }
-        }
-      } catch {
-        // Backup also failed
+        } catch { /* legacy read failed */ }
       }
-    }
-
-    // Tier 3: Check for legacy keys (old format migration)
-    if (!loaded) {
-      try {
-        const legacyRaw = await StorageAdapter.get('kql-store-queries');
-        if (legacyRaw !== null && legacyRaw !== undefined) {
-          const parsed = safeJsonParse(legacyRaw);
-          if (parsed.ok && Array.isArray(parsed.data)) {
-            setQueries(parsed.data);
-            loaded = true;
-            // Migrate to new format
-            const blob = buildBlob(parsed.data);
-            await StorageAdapter.set(STORAGE_KEY, blob);
-          }
-        }
-      } catch { /* legacy read failed */ }
-    }
-
-    // Tier 4: Start empty if truly fresh
-    if (!loaded) {
-      setQueries([]);
     }
 
     setIsLoading(false);
   }, [buildBlob]);
 
-  // Initialize on mount
+  // Flush pending save synchronously to localStorage (for tab close / visibility change)
+  const flushPendingSave = useCallback(() => {
+    const toSave = pendingSaveRef.current;
+    if (!toSave) return;
+    pendingSaveRef.current = null;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    try {
+      const blob = buildBlob(toSave);
+      localStorage.setItem(STORAGE_KEY, blob);
+    } catch {
+      // Best-effort on close — nothing we can do if it fails
+    }
+  }, [buildBlob]);
+
+  // Initialize on mount + register flush-on-close handlers + API retry
   useEffect(() => {
     loadData();
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-  }, [loadData]);
 
-  // Save a single query (create or update)
+    const handleBeforeUnload = () => flushPendingSave();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushPendingSave();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Retry interval: when API is unavailable, periodically try to re-sync
+    retryIntervalRef.current = setInterval(async () => {
+      if (!apiAvailableRef.current) {
+        try {
+          await StorageAdapter.healthCheck();
+          apiAvailableRef.current = true;
+          await syncToApi();
+        } catch {
+          // Still unavailable, will retry next interval
+        }
+      }
+    }, API_RETRY_INTERVAL_MS);
+
+    return () => {
+      flushPendingSave();
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (retryIntervalRef.current) clearInterval(retryIntervalRef.current);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [loadData, flushPendingSave, syncToApi]);
+
+  // Save a single query (create or update) — optimistic UI + API call
   const saveQuery = useCallback(async (queryData) => {
     const now = new Date().toISOString();
     const prepared = {
@@ -587,14 +693,16 @@ function useKQLStorage() {
       return false;
     }
     const sanitized = validation.sanitized;
-    let result;
+    let isUpdate = false;
 
+    // Optimistic UI update + cache write
     setQueries((prev) => {
       const idx = prev.findIndex((q) => q.id === sanitized.id);
+      let result;
       if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = sanitized;
-        result = updated;
+        isUpdate = true;
+        result = [...prev];
+        result[idx] = sanitized;
       } else {
         result = [...prev, sanitized];
       }
@@ -602,17 +710,53 @@ function useKQLStorage() {
       return result;
     });
 
+    setSavingState('saving');
+    setLastSavedTimestamp(now);
+
+    // Async API call
+    if (apiAvailableRef.current) {
+      try {
+        if (isUpdate) {
+          await StorageAdapter.updateQuery(sanitized.id, sanitized);
+        } else {
+          await StorageAdapter.createQuery(sanitized);
+        }
+        setSavingState('saved');
+        setError(null);
+        setTimeout(() => setSavingState((s) => s === 'saved' ? 'idle' : s), 2000);
+      } catch {
+        apiAvailableRef.current = false;
+        setSavingState('saved');
+        // Data is safe in cache; will sync when API returns
+        setTimeout(() => setSavingState((s) => s === 'saved' ? 'idle' : s), 2000);
+      }
+    } else {
+      setSavingState('saved');
+      setTimeout(() => setSavingState((s) => s === 'saved' ? 'idle' : s), 2000);
+    }
+
     return true;
   }, [persistQueries]);
 
-  // Delete a query by id
+  // Delete a query by id — optimistic UI + API call
   const deleteQuery = useCallback(async (id) => {
-    let result;
+    // Optimistic UI update + cache write
     setQueries((prev) => {
-      result = prev.filter((q) => q.id !== id);
+      const result = prev.filter((q) => q.id !== id);
       persistQueries(result);
       return result;
     });
+
+    // Async API call
+    if (apiAvailableRef.current) {
+      try {
+        await StorageAdapter.deleteQuery(id);
+      } catch {
+        apiAvailableRef.current = false;
+        // Data is safe in cache; will sync when API returns
+      }
+    }
+
     return true;
   }, [persistQueries]);
 
@@ -692,6 +836,18 @@ function useKQLStorage() {
 
     setQueries(newQueries);
     persistQueries(newQueries);
+
+    // Bulk import to API
+    if (apiAvailableRef.current && report.added > 0) {
+      const addedQueries = newQueries.slice(newQueries.length - report.added);
+      try {
+        await StorageAdapter.importQueries(addedQueries);
+      } catch {
+        apiAvailableRef.current = false;
+        // Data is safe in cache; will sync when API returns
+      }
+    }
+
     return report;
   }, [persistQueries]);
 
@@ -721,15 +877,25 @@ function useKQLStorage() {
     };
   }, [queries, lastSavedTimestamp]);
 
-  // Clear all
+  // Clear all — localStorage cache + API
   const clearAll = useCallback(async () => {
     try {
-      await StorageAdapter.delete(STORAGE_KEY);
-      await StorageAdapter.delete(BACKUP_KEY);
+      StorageAdapter.deleteCachedData();
       setQueries([]);
       setLastSavedTimestamp(null);
       setBackupTimestamp(null);
       setError(null);
+
+      // Delete all from API
+      if (apiAvailableRef.current) {
+        try {
+          const apiQueries = await StorageAdapter.fetchAll();
+          await Promise.all(apiQueries.map(q => StorageAdapter.deleteQuery(q.id)));
+        } catch {
+          apiAvailableRef.current = false;
+        }
+      }
+
       return true;
     } catch (e) {
       setError('Failed to clear storage: ' + e.message);
@@ -737,55 +903,47 @@ function useKQLStorage() {
     }
   }, []);
 
-  // Health check — FIX Finding 12: reports estimated storage size
+  // Health check — reports localStorage + API status
   const healthCheck = useCallback(async () => {
-    const result = { ok: true, writable: false, readable: false, dataValid: false, estimatedSizeKB: 0, details: [] };
+    const result = { ok: true, writable: false, readable: false, dataValid: false, estimatedSizeKB: 0, apiAvailable: false, details: [] };
 
-    // 1. Write test
+    // 1. localStorage write test
     try {
       const testValue = JSON.stringify({ test: true, ts: Date.now() });
       await StorageAdapter.set(HEALTH_TEST_KEY, testValue);
       result.writable = true;
-      result.details.push('Write test: passed');
+      result.details.push('Cache write test: passed');
     } catch (e) {
       result.ok = false;
-      result.details.push('Write test: FAILED - ' + e.message);
+      result.details.push('Cache write test: FAILED - ' + e.message);
     }
 
-    // 2. Read test
+    // 2. localStorage read test
     if (result.writable) {
       try {
         const readBack = await StorageAdapter.get(HEALTH_TEST_KEY);
         if (readBack !== null) {
           result.readable = true;
-          result.details.push('Read test: passed');
+          result.details.push('Cache read test: passed');
         } else {
           result.ok = false;
-          result.details.push('Read test: FAILED - got null');
+          result.details.push('Cache read test: FAILED - got null');
         }
       } catch (e) {
         result.ok = false;
-        result.details.push('Read test: FAILED - ' + e.message);
+        result.details.push('Cache read test: FAILED - ' + e.message);
       }
     }
 
     // 3. Delete test key
     try {
       await StorageAdapter.delete(HEALTH_TEST_KEY);
-      result.details.push('Delete test: passed');
+      result.details.push('Cache delete test: passed');
     } catch {
-      result.details.push('Delete test: FAILED');
+      result.details.push('Cache delete test: FAILED');
     }
 
-    // 4. List test
-    try {
-      const keys = await StorageAdapter.list('kql-store:');
-      result.details.push('List test: passed (' + keys.length + ' keys)');
-    } catch (e) {
-      result.details.push('List test: FAILED - ' + e.message);
-    }
-
-    // 5. Read main data, validate
+    // 4. Cache data validation
     try {
       const mainRaw = await StorageAdapter.get(STORAGE_KEY);
       if (mainRaw !== null) {
@@ -793,17 +951,26 @@ function useKQLStorage() {
         if (parsed.ok && parsed.data && parsed.data.schemaVersion === CURRENT_SCHEMA_VERSION && Array.isArray(parsed.data.queries)) {
           result.dataValid = true;
           result.estimatedSizeKB = Math.round((mainRaw.length * 2) / 1024 * 100) / 100;
-          result.details.push('Data validation: passed (v' + parsed.data.schemaVersion + ', ' + parsed.data.queries.length + ' queries, ~' + result.estimatedSizeKB + ' KB)');
+          result.details.push('Cache data: valid (v' + parsed.data.schemaVersion + ', ' + parsed.data.queries.length + ' queries, ~' + result.estimatedSizeKB + ' KB)');
         } else {
-          result.ok = false;
-          result.details.push('Data validation: FAILED - invalid schema or structure');
+          result.details.push('Cache data: invalid schema or structure');
         }
       } else {
-        result.details.push('Data validation: no data stored yet');
+        result.details.push('Cache data: no data stored yet');
       }
     } catch (e) {
-      result.ok = false;
-      result.details.push('Data validation: FAILED - ' + e.message);
+      result.details.push('Cache data: FAILED - ' + e.message);
+    }
+
+    // 5. API health check
+    try {
+      const apiHealth = await StorageAdapter.healthCheck();
+      result.apiAvailable = apiHealth.status === 'ok';
+      apiAvailableRef.current = result.apiAvailable;
+      result.details.push('API: connected (' + apiHealth.queriesCount + ' queries in DB)');
+    } catch (e) {
+      apiAvailableRef.current = false;
+      result.details.push('API: unreachable - ' + e.message);
     }
 
     return result;
@@ -1903,7 +2070,7 @@ export default function KQLStore() {
                 <Star size={14} fill={query.favorite ? '#ffcc00' : 'none'} style={{ color: query.favorite ? '#ffcc00' : '#3a3a4e' }} />
               </button>
             </div>
-            {query.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{query.description}</p>}
+            {query.description && <p className="text-xs text-gray-500 mt-1">{query.description}</p>}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <button onClick={() => copyToClipboard(query.query, query.id)} className="p-1.5 rounded-md hover:bg-white/5" title="Copy"><Copy size={14} className="text-gray-500 hover:text-gray-300" /></button>

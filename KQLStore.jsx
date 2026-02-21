@@ -742,10 +742,11 @@ function useKQLStorage() {
       apiAvailableRef.current = true;
       setSavingState('saved');
       setError(null);
-    } catch {
+    } catch (err) {
       apiAvailableRef.current = false;
-      setSavingState('saved');
-      // Data is safe in cache; will sync when API returns
+      setSavingState('error');
+      setError('Save failed — stored locally only. Changes may be lost if you clear browser data.');
+      return false;
     }
     setTimeout(() => setSavingState((s) => s === 'saved' ? 'idle' : s), 2000);
 

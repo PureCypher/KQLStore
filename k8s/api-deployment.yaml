@@ -7,7 +7,7 @@ metadata:
     app: kqlstore-api
     app.kubernetes.io/managed-by: kustomize
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: Recreate
   selector:
@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kqlstore-api
-          image: 192.168.1.76:5001/kqlstore-api:latest
+          image: 192.168.1.100:5000/kqlstore-api:latest
           ports:
             - containerPort: 3000
               protocol: TCP

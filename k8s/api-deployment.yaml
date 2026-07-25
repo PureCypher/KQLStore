@@ -33,8 +33,16 @@ spec:
           env:
             - name: DB_PATH
               value: /data/kqlstore.db
-            # API_TOKEN is deliberately NOT set. Access control here is
-            # k8s/api-networkpolicy.yaml, which admits only the frontend pods.
+            # API_TOKEN is deliberately NOT set. Access control is layered elsewhere:
+            #   1. Cloudflare Access authenticates every external request at the edge,
+            #      before it reaches the cluster. This is the user-facing authn/authz.
+            #   2. k8s/api-networkpolicy.yaml admits only the frontend pods, so the
+            #      API is not reachable laterally from anything else in the cluster.
+            #
+            # Because (1) terminates outside the cluster, it does NOT protect a request
+            # that reaches the Service or node directly without passing through
+            # Cloudflare. Keep the origin unreachable except via the tunnel/ingress that
+            # Access fronts.
             #
             # Do not simply add API_TOKEN: the SPA sends no Authorization header and
             # nginx injects none, so enabling it locks the application out entirely

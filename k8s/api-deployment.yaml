@@ -33,6 +33,17 @@ spec:
           env:
             - name: DB_PATH
               value: /data/kqlstore.db
+            # API_TOKEN is deliberately NOT set. Access control here is
+            # k8s/api-networkpolicy.yaml, which admits only the frontend pods.
+            #
+            # Do not simply add API_TOKEN: the SPA sends no Authorization header and
+            # nginx injects none, so enabling it locks the application out entirely
+            # (every /api/ call returns 401). To use it you must also make the proxy
+            # supply the header, e.g. render nginx.conf from a Secret and add
+            #   proxy_set_header Authorization "Bearer <token>";
+            # to the location /api/ block. The token must come from the proxy, never
+            # from the browser — anything the SPA holds is readable by anyone who can
+            # load the page.
           resources:
             requests:
               cpu: 25m

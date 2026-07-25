@@ -1,12 +1,27 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
+const { validateQueryPayload, badRequest, LIMITS } = require('../validate');
 
 const router = Router();
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Parse the tags column defensively. An unguarded JSON.parse here takes down every
+ * endpoint that touches the row — list, get and export — if a single row holds
+ * malformed JSON or a non-array value.
+ */
+function parseTags(raw) {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Convert a DB row to the frontend-friendly shape. */
 function toFrontend(row) {
@@ -17,7 +32,7 @@ function toFrontend(row) {
     description: row.description,
     category: row.category,
     table: row.table_name,
-    tags: JSON.parse(row.tags || '[]'),
+    tags: parseTags(row.tags),
     favorite: row.favorite === 1,
     usageCount: row.usage_count,
     created: row.created,
@@ -65,10 +80,23 @@ router.post('/import', (req, res, next) => {
     const { queries } = req.body;
 
     if (!Array.isArray(queries)) {
-      const error = new Error('Request body must contain a "queries" array');
-      error.statusCode = 400;
-      throw error;
+      throw badRequest('Request body must contain a "queries" array');
     }
+    if (queries.length > LIMITS.importItems) {
+      throw badRequest(`"queries" exceeds ${LIMITS.importItems} entries`);
+    }
+
+    // Validate every item up front so a malformed batch is rejected as a unit rather
+    // than half-written. Invalid items are reported, not silently stored.
+    const valid = [];
+    const rejected = [];
+    queries.forEach((q, i) => {
+      try {
+        valid.push({ ...validateQueryPayload(q, { partial: false }), id: q.id, created: q.created, updated: q.updated });
+      } catch (e) {
+        rejected.push({ index: i, reason: e.message });
+      }
+    });
 
     const insert = db.prepare(`
       INSERT OR IGNORE INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, created, updated)
@@ -86,7 +114,7 @@ router.post('/import', (req, res, next) => {
           query: q.query,
           description: q.description || '',
           category: q.category || 'Utility',
-          table_name: q.table || q.table_name || '',
+          table_name: q.table || '',
           tags: JSON.stringify(q.tags || []),
           favorite: q.favorite ? 1 : 0,
           usage_count: Number.isInteger(q.usageCount) && q.usageCount >= 0 ? q.usageCount : 0,
@@ -98,8 +126,8 @@ router.post('/import', (req, res, next) => {
       return imported;
     });
 
-    const imported = importMany(queries);
-    res.json({ imported, total: queries.length });
+    const imported = importMany(valid);
+    res.json({ imported, total: queries.length, rejected });
   } catch (err) {
     next(err);
   }
@@ -127,13 +155,8 @@ router.get('/:id', (req, res, next) => {
 // ---------------------------------------------------------------------------
 router.post('/', (req, res, next) => {
   try {
-    const { name, query, description, category, table, table_name, tags, favorite, usageCount } = req.body;
-
-    if (!name || !query) {
-      const error = new Error('"name" and "query" are required');
-      error.statusCode = 400;
-      throw error;
-    }
+    const v = validateQueryPayload(req.body, { partial: false });
+    const { name, query, description, category, table, tags, favorite, usageCount } = v;
 
     const now = new Date().toISOString();
     const id = req.body.id || uuidv4();
@@ -147,7 +170,7 @@ router.post('/', (req, res, next) => {
       query,
       description || '',
       category || 'Utility',
-      table || table_name || '',
+      table || '',
       JSON.stringify(tags || []),
       favorite ? 1 : 0,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : 0,
@@ -174,7 +197,8 @@ router.put('/:id', (req, res, next) => {
       throw error;
     }
 
-    const { name, query, description, category, table, table_name, tags, favorite, usageCount } = req.body;
+    const v = validateQueryPayload(req.body, { partial: true });
+    const { name, query, description, category, table, tags, favorite, usageCount } = v;
     const now = new Date().toISOString();
 
     db.prepare(`
@@ -194,7 +218,7 @@ router.put('/:id', (req, res, next) => {
       query ?? existing.query,
       description ?? existing.description,
       category ?? existing.category,
-      table ?? table_name ?? existing.table_name,
+      table ?? existing.table_name,
       tags !== undefined ? JSON.stringify(tags) : existing.tags,
       favorite !== undefined ? (favorite ? 1 : 0) : existing.favorite,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : existing.usage_count,

@@ -45,15 +45,19 @@ if (!API_TOKEN) {
 app.use('/api/queries', (req, res, next) => {
   if (!API_TOKEN) return next();
   const header = req.get('authorization') || '';
-  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-  // Length-independent compare avoids leaking the token length via timing.
-  const ok = presented.length === API_TOKEN.length &&
-    crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(API_TOKEN));
+  const presented = /^bearer /i.test(header) ? header.slice(7) : '';
+  // Compare BYTE length, not character length: two strings of equal .length can produce
+  // buffers of different byte length once multi-byte UTF-8 is involved, and
+  // timingSafeEqual throws RangeError on a length mismatch — turning a 401 into a 500
+  // and handing the caller a token-length oracle.
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(API_TOKEN, 'utf8');
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
   if (!ok) return res.status(401).json({ error: 'Unauthorized' });
   return next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 // ---------------------------------------------------------------------------
 // Routes

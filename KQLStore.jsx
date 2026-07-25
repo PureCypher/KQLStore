@@ -1598,16 +1598,12 @@ export default function KQLStore() {
     storage.saveQuery({ ...current, usageCount: (current.usageCount || 0) + 1 });
   }, [queries, storage]);
 
-  const duplicateQuery = useCallback((query) => {
+  const duplicateQuery = useCallback(async (query) => {
     const now = new Date().toISOString();
     const dup = { ...query, id: generateId(), name: `${query.name} (copy)`, created: now, updated: now, usageCount: 0 };
-    setQueries((prev) => {
-      const updated = [...prev, dup];
-      persistQueries(updated);
-      return updated;
-    });
-    addToast('Query duplicated', 'success');
-  }, [setQueries, persistQueries, addToast]);
+    const ok = await storage.saveQuery(dup);
+    addToast(ok ? 'Query duplicated' : 'Duplicate saved locally only — API unreachable', ok ? 'success' : 'error');
+  }, [storage, addToast]);
 
   // --- Import / Export ---
   const handleExport = useCallback((exportQueries = null) => {
@@ -1688,15 +1684,23 @@ export default function KQLStore() {
   }, [importPreview, storage, addToast]);
 
   // --- Bulk Operations ---
-  const handleBulkDelete = useCallback(() => {
-    setQueries((prev) => {
-      const updated = prev.filter((q) => !selectedIds.has(q.id));
-      persistQueries(updated);
-      return updated;
-    });
-    addToast(`Deleted ${selectedIds.size} queries`, 'info');
+  // These must reach the API like the single-item operations do. Writing only the localStorage
+  // cache meant the next load replaced it with the server rows, so bulk-deleted queries came
+  // back and bulk re-categorisation was discarded — in both cases after a success toast.
+  const applyBulk = useCallback(async (ids, fn, verb) => {
+    const results = await Promise.allSettled(ids.map(fn));
+    const failed = results.filter((r) => r.status === 'rejected' || r.value === false).length;
+    if (failed === 0) {
+      addToast(`${verb} ${ids.length} queries`, 'success');
+    } else {
+      addToast(`${verb} ${ids.length - failed} of ${ids.length} — ${failed} failed, API may be unreachable`, 'error');
+    }
     setSelectedIds(new Set());
-  }, [selectedIds, setQueries, persistQueries, addToast]);
+  }, [addToast]);
+
+  const handleBulkDelete = useCallback(() => {
+    applyBulk([...selectedIds], (id) => storage.deleteQuery(id), 'Deleted');
+  }, [selectedIds, storage, applyBulk]);
 
   const handleBulkExport = useCallback(() => {
     const selected = queries.filter((q) => selectedIds.has(q.id));
@@ -1705,24 +1709,18 @@ export default function KQLStore() {
   }, [queries, selectedIds, handleExport]);
 
   const handleBulkCategory = useCallback((category) => {
-    setQueries((prev) => {
-      const updated = prev.map((q) => selectedIds.has(q.id) ? { ...q, category, updated: new Date().toISOString() } : q);
-      persistQueries(updated);
-      return updated;
-    });
-    addToast(`Moved ${selectedIds.size} queries to ${category}`, 'success');
-    setSelectedIds(new Set());
-  }, [selectedIds, setQueries, persistQueries, addToast]);
+    applyBulk([...selectedIds], (id) => {
+      const q = queries.find((x) => x.id === id);
+      return q ? storage.saveQuery({ ...q, category }) : false;
+    }, `Moved to ${category}:`);
+  }, [selectedIds, queries, storage, applyBulk]);
 
   const handleBulkTable = useCallback((table) => {
-    setQueries((prev) => {
-      const updated = prev.map((q) => selectedIds.has(q.id) ? { ...q, table, updated: new Date().toISOString() } : q);
-      persistQueries(updated);
-      return updated;
-    });
-    addToast(`Set ${selectedIds.size} queries to table ${getTableDisplayName(table)}`, 'success');
-    setSelectedIds(new Set());
-  }, [selectedIds, setQueries, persistQueries, addToast]);
+    applyBulk([...selectedIds], (id) => {
+      const q = queries.find((x) => x.id === id);
+      return q ? storage.saveQuery({ ...q, table }) : false;
+    }, `Set table ${getTableDisplayName(table)} on`);
+  }, [selectedIds, queries, storage, applyBulk]);
 
   // --- Force backup ---
   const handleForceBackup = useCallback(async () => {

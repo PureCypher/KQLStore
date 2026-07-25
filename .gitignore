@@ -1,0 +1,23 @@
+# Build output — KQLStore.js / KQLStoreTests.js are produced by Babel at image
+# build time (see Dockerfile) and must never be committed.
+KQLStore.js
+KQLStoreTests.js
+
+# Dependencies
+node_modules/
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Tooling scratch — .playwright-mcp was committed once already and had to be
+# deleted in e0670a3; keep it out for good.
+.playwright-mcp/
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

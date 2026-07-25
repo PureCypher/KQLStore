@@ -841,19 +841,27 @@ function useKQLStorage() {
 function highlightKQL(code) {
   if (!code || typeof code !== 'string') return '';
 
+  // The placeholder prefix must be absent from the input. A query body containing a
+  // literal token would otherwise be hit first by the restore loop below, swapping
+  // highlighted fragments and leaving the real token as visible text. Escaping can only
+  // push characters apart, never join them, so checking the raw input is sufficient.
+  let mark = '__PH';
+  while (code.includes(mark)) mark += 'X';
+
   const placeholders = [];
-  const ph = (html) => { const i = placeholders.length; placeholders.push(html); return `__PH${i}__`; };
+  const ph = (html) => { const i = placeholders.length; placeholders.push(html); return `${mark}${i}__`; };
   const span = (color, text, bold) =>
     `<span style="color:${color}${bold ? ';font-weight:bold' : ''}">${text}</span>`;
 
   // Escape HTML entities first to prevent injection
   let r = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Comments
-  r = r.replace(/\/\/.*$/gm, (m) => ph(span('#5c6370', m)));
-  // Strings (double then single quoted, escaped quotes handled)
-  r = r.replace(/"(?:[^"\\]|\\.)*"/g, (m) => ph(span('#98c379', m)));
-  r = r.replace(/'(?:[^'\\]|\\.)*'/g, (m) => ph(span('#98c379', m)));
+  // Comments and strings must be matched in ONE pass so that whichever opens first wins.
+  // Separate passes are mutually destructive: comments-first lets the // in a URL literal
+  // ("https://portal.azure.com") open a comment that swallows the rest of the line and the
+  // line after it; strings-first lets an apostrophe in a comment (// don't) open a string.
+  r = r.replace(/\/\/[^\n]*|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+    (m) => ph(span(m.startsWith('//') ? '#5c6370' : '#98c379', m)));
   // Pipe operator at line starts
   r = r.replace(/^([ \t]*)(\|)/gm, (_, ws, pipe) => ws + ph(span('#00ff88', pipe, true)));
 
@@ -912,9 +920,12 @@ function highlightKQL(code) {
   // Numbers
   r = r.replace(/\b\d+(?:\.\d+)?\b/g, (m) => ph(span('#d19a66', m)));
 
-  // Restore placeholders in reverse order
+  // Restore placeholders in reverse order.
+  // The replacement MUST stay a function: with a string replacement, $&, $`, $' and $$
+  // are special patterns, and placeholders hold user query text — a body containing $'
+  // re-inserts the rest of the output on every iteration and grows exponentially.
   for (let i = placeholders.length - 1; i >= 0; i--) {
-    r = r.replace(`__PH${i}__`, placeholders[i]);
+    r = r.replace(`${mark}${i}__`, () => placeholders[i]);
   }
   return r;
 }

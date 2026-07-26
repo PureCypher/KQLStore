@@ -17,7 +17,7 @@
   "dependencies": {
     "lucide-react": "0.454.0",
     "react": "18.3.1",
-    "react-dom": "19.2.8"
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
@@ -26,7 +26,7 @@
     "@vitest/coverage-v8": "2.1.9",
     "axe-core": "4.12.1",
     "esbuild": "0.24.2",
-    "eslint": "10.8.0",
+    "eslint": "9.39.5",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "5.2.0",
     "globals": "15.15.0",

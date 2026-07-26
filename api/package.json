@@ -12,7 +12,7 @@
     "node": ">=20 <25"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^13.0.1",
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "uuid": "^14.0.1"

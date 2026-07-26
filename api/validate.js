@@ -21,6 +21,9 @@ const LIMITS = {
   tagLength: 50,
   tagCount: 20,
   importItems: 1000,
+  // The detection block is a JSON document. This bounds it as a whole rather than
+  // duplicating the SPA's per-field vocabulary checks, which are the authority.
+  metadata: 20000,
   id: 200,
   // Long enough for any ISO 8601 variant with an offset; short enough that a caller
   // cannot smuggle a payload through a timestamp column.
@@ -63,6 +66,48 @@ function checkTags(value) {
 function checkUsageCount(value) {
   if (value === undefined || value === null) return undefined;
   if (!Number.isInteger(value) || value < 0) throw badRequest('"usageCount" must be a non-negative integer');
+  return value;
+}
+
+// The schema v4 detection fields. toFrontend spreads these back to the top level, so the
+// write path must accept them there too — otherwise the API emits a shape it cannot itself
+// consume, and a client that round-trips a query would silently drop its metadata.
+const DETECTION_FIELDS = [
+  'queryType', 'severity', 'confidence', 'platform', 'attack', 'dataSources',
+  'entityMappings', 'falsePositives', 'references', 'tuningNotes', 'lookback',
+  'version', 'lastValidated', 'author', 'license',
+];
+
+/**
+ * Collect the detection block from either shape: nested under `metadata`, or spread across
+ * the top level as the API itself returns it. Top-level keys win, since that is what a
+ * client that read a query and wrote it back will be sending.
+ */
+function collectMetadata(body) {
+  const nested = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata
+    : {};
+  const merged = { ...nested };
+  for (const field of DETECTION_FIELDS) {
+    if (body[field] !== undefined) merged[field] = body[field];
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * The schema v4 detection block, carried as an opaque JSON object. The SPA validates its
+ * shape against the ATT&CK/severity vocabularies; the API's job is to stop it being used as
+ * unbounded storage, so it bounds the serialised size and rejects non-objects.
+ */
+function checkMetadata(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw badRequest('"metadata" must be a JSON object');
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded.length > LIMITS.metadata) {
+    throw badRequest(`"metadata" exceeds ${LIMITS.metadata} characters when serialised`);
+  }
   return value;
 }
 
@@ -109,6 +154,9 @@ function validateQueryPayload(body, { partial = false } = {}) {
 
   const usageCount = checkUsageCount(body.usageCount);
   if (usageCount !== undefined) out.usageCount = usageCount;
+
+  const metadata = checkMetadata(collectMetadata(body));
+  if (metadata !== undefined) out.metadata = metadata;
 
   return out;
 }

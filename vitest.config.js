@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/__tests__/**/*.test.js'],
+    include: ['src/**/__tests__/**/*.test.js', 'content/__tests__/**/*.test.js'],
     coverage: {
       provider: 'v8',
       include: ['src/domain/**', 'src/lib/**'],

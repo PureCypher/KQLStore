@@ -29,6 +29,7 @@ const createTableSQL = `
     tags        TEXT DEFAULT '[]',
     favorite    INTEGER DEFAULT 0,
     usage_count INTEGER NOT NULL DEFAULT 0,
+    metadata    TEXT NOT NULL DEFAULT '{}',
     created     TEXT NOT NULL,
     updated     TEXT NOT NULL
   )
@@ -43,6 +44,17 @@ const hasUsageCount = db
   .get().n > 0;
 if (!hasUsageCount) {
   db.prepare('ALTER TABLE queries ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0').run();
+}
+
+// Schema v4 detection metadata (ATT&CK mapping, severity, false positives, entity mappings
+// and so on). Stored as a JSON document rather than seventeen columns: it is optional, it is
+// only ever read as a whole, and all filtering happens client-side once the SPA has loaded
+// the store. tags has used the same approach since the beginning.
+const hasMetadata = db
+  .prepare("SELECT COUNT(*) AS n FROM pragma_table_info('queries') WHERE name = 'metadata'")
+  .get().n > 0;
+if (!hasMetadata) {
+  db.prepare("ALTER TABLE queries ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'").run();
 }
 
 module.exports = db;

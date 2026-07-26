@@ -134,6 +134,9 @@ const StorageAdapter = {
       const parsed = safeJsonParse(raw);
       if (parsed.ok && parsed.data) {
         const migrated = migrateData(parsed.data);
+        // Written by a newer build: use it read-only rather than migrating it backwards.
+        // The cache is only a fast path, so ignoring it costs a round trip, not data.
+        if (migrated && migrated.tooNew) return null;
         return migrated;
       }
       return null;

@@ -31,6 +31,16 @@ function parseTags(raw) {
   }
 }
 
+/** Parse the metadata document defensively — one malformed row must not 500 the list. */
+function parseMetadata(raw) {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /** Convert a DB row to the frontend-friendly shape. */
 function toFrontend(row) {
   return {
@@ -43,6 +53,9 @@ function toFrontend(row) {
     tags: parseTags(row.tags),
     favorite: row.favorite === 1,
     usageCount: row.usage_count,
+    // Spread the v4 detection block back to the top level, which is the shape the SPA's
+    // validateQuery works in. Stored nested so it is one additive column, not seventeen.
+    ...parseMetadata(row.metadata),
     created: row.created,
     updated: row.updated,
   };
@@ -274,8 +287,8 @@ router.post('/', (req, res, next) => {
     const id = suppliedId || uuidv4();
 
     db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, created, updated)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, created, updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       name,
@@ -286,6 +299,7 @@ router.post('/', (req, res, next) => {
       JSON.stringify(tags || []),
       favorite ? 1 : 0,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : 0,
+      JSON.stringify(v.metadata || {}),
       now,
       now,
     );
@@ -343,6 +357,7 @@ router.put('/:id', (req, res, next) => {
           tags        = ?,
           favorite    = ?,
           usage_count = ?,
+          metadata    = ?,
           updated     = ?
       WHERE id = ?
     `).run(
@@ -354,6 +369,7 @@ router.put('/:id', (req, res, next) => {
       tags !== undefined ? JSON.stringify(tags) : existing.tags,
       favorite !== undefined ? (favorite ? 1 : 0) : existing.favorite,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : existing.usage_count,
+      v.metadata !== undefined ? JSON.stringify(v.metadata) : existing.metadata,
       now,
       req.params.id,
     );

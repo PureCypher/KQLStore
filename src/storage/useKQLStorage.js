@@ -312,8 +312,18 @@ function useKQLStorage() {
 
     // Handle both blob format and raw array
     if (incoming && typeof incoming === 'object' && !Array.isArray(incoming) && Array.isArray(incoming.queries)) {
-      // Run through migration if it's a versioned blob (handles v2->v3 category/table migration)
+      // Run through migration if it's a versioned blob (v1->v4 category, table and
+      // ATT&CK-tag promotion). A file from a newer build is refused rather than silently
+      // downgraded, because importing it would strip fields this build does not know about.
       const migrated = migrateData(incoming);
+      if (migrated && migrated.tooNew) {
+        report.errors = 1;
+        report.details.push({
+          error: `This file was exported by a newer version of KQL Store (schema v${migrated.schemaVersion}). `
+               + 'Upgrade before importing it, or fields would be silently dropped.',
+        });
+        return report;
+      }
       incoming = migrated ? migrated.queries : incoming.queries;
     }
 

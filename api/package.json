@@ -7,9 +7,9 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "// engines": "better-sqlite3 11.x ships prebuilds for Node 18/20/22 only; newer runtimes fall back to a node-gyp build that fails. The Dockerfile targets node:22-alpine.",
+  "// engines": "better-sqlite3 11.x ships prebuilds only up to the Node 22 ABI, so Node 24 compiles it from source instead — that works and is what api/Dockerfile does. Node 26 is excluded because 11.x does not compile against its V8 headers at all. The Dockerfile targets node:24-alpine (Active LTS).",
   "engines": {
-    "node": ">=20 <23"
+    "node": ">=20 <25"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

@@ -86,6 +86,24 @@ updates:
   # a pinned digest never updates itself. Dependabot rewrites `FROM image@sha256:...`
   # in place, which is what makes the pinning maintainable rather than a slow rot.
   # Note a rebuild is still required for a patched base to reach a running pod.
+  #
+  # NODE MAJORS ARE NOT AUTO-MERGEABLE. Dependabot offers whatever tag is newest, which
+  # is not the same as the one to run. Two rules, both learned the hard way:
+  #
+  #   1. Track the Active LTS line, not Current. Node 26 was offered the day this
+  #      ecosystem was added; it does not become LTS until 2026-10-28.
+  #   2. Check better-sqlite3 first. It is a native addon and the API pins 11.x, which
+  #      does not compile against Node 26's V8 headers at all (GetPrototype,
+  #      Context::GetIsolate and PropertyCallbackInfo::This were removed). The bump to
+  #      Node 26 failed its Docker build for exactly this reason.
+  #
+  # A bump also has to move `engines` in api/package.json and NODE_VERSION in
+  # .github/workflows/ci.yml, or the manifest and CI contradict the image.
+  #
+  # There is deliberately no `ignore` rule for node here: GitHub does not document
+  # whether ignoring semver-major also suppresses digest-only refreshes, and losing
+  # automatic base-image security digests would be a worse outcome than reviewing the
+  # occasional major by hand. Closing an unwanted major stops it being re-offered.
   # -------------------------------------------------------------------------
   - package-ecosystem: docker
     directory: /

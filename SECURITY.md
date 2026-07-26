@@ -129,8 +129,8 @@ unauthenticated database on your network, and the fault is not in the code.
 
 ### Supply chain
 
-- Both images pin their base images by digest rather than by tag — `node:22-alpine` and
-  `nginx:1.27-alpine` for the frontend, `node:22-alpine` for the API — so two builds of the same
+- Both images pin their base images by digest rather than by tag — `node:24-alpine` and
+  `nginx:1.31-alpine` for the frontend, `node:24-alpine` for the API — so two builds of the same
   commit produce the same bytes and "rebuild and compare" remains a usable incident-response step.
   The API declares its base once and both of its stages inherit it, so the two cannot drift apart.
 - Dependencies install from committed lockfiles. The frontend build uses `npm ci --ignore-scripts`

@@ -30,9 +30,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # better-sqlite3 11.x ships prebuilds for Node 18/20/22 only (see api/package.json);
-  # anything newer falls back to a node-gyp build that fails on the runner.
-  NODE_VERSION: '22'
+  # Matches the Active LTS line both images are built on (see Dockerfile / api/Dockerfile).
+  # better-sqlite3 11.x has no prebuild for this ABI, so the API install compiles it from
+  # source on the runner — that works (ubuntu-latest carries python3 and build-essential)
+  # and adds roughly a minute. Do not raise this to Node 26 without also moving
+  # better-sqlite3: 11.x does not compile against Node 26's V8 headers.
+  NODE_VERSION: '24'
 
 jobs:
   # -------------------------------------------------------------------------
@@ -99,15 +102,17 @@ jobs:
 
       # Unconditional: npm ci fails when package.json and package-lock.json have
       # drifted, which is worth catching on its own. It also proves better-sqlite3
-      # still resolves a prebuild for this Node major rather than trying to compile.
+      # still produces a loadable binding for this Node major — by prebuild where one
+      # exists, and by compiling from source where one does not.
       - name: Install dependencies
         run: npm ci
 
       # The pattern is quoted so Node expands it, not the shell. `node --test test/`
-      # looks like it should work and does not: given a positional path, Node 22
+      # looks like it should work and does not: given a positional path, Node
       # resolves it as a module rather than scanning it, so it fails with
       # MODULE_NOT_FOUND and reports one failing test regardless of what is in there.
-      # Verified against node:22-bookworm-slim. Letting Node glob also keeps helpers.js
+      # Verified against node:22-bookworm-slim and re-checked on node:24-bookworm, where
+      # it still reports a single synthetic failure. Letting Node glob also keeps helpers.js
       # out of the run and picks up nested directories if the suite grows.
       - name: Run tests
         run: |

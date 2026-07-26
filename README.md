@@ -55,7 +55,7 @@ tolerates exactly one writer. Scaling out means replacing SQLite, not adding rep
 | `content/` | `starter-pack.json`, 15 example queries, validated in CI |
 | `index.html` | Entry point; loads the bundle, no inline script |
 | `nginx.conf` | Static serving, `/api/` proxy, CSP and security headers |
-| `Dockerfile` | esbuild + Tailwind build stage → `nginx:1.27-alpine` runtime |
+| `Dockerfile` | esbuild + Tailwind build stage → `nginx:1.31-alpine` runtime |
 | `api/` | Express app, SQLite schema, request validation, `api/test/` |
 | `k8s/` | Namespace, Deployments, Services, PVCs, NetworkPolicies, backup CronJob |
 | `docs/` | The reference pages listed at the [end of this file](#documentation) |

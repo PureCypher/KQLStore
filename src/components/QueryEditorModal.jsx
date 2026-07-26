@@ -4,14 +4,18 @@ import { CATEGORIES, CATEGORY_COLORS } from '../constants.js';
 import { HighlightedCode } from './HighlightedCode.jsx';
 import { TableSelector } from './TableSelector.jsx';
 import { useApp } from '../context/app.js';
+import { LintPanel } from './LintPanel.jsx';
+import { DetectionMetadataFields } from './DetectionMetadataFields.jsx';
+import { metadataToForm, formToMetadata } from '../domain/metadataForm.js';
 import { FOCUS_RING } from './a11y.jsx';
 import { Modal } from './Modal.jsx';
 
 const QueryEditorModal = () => {
   const { editingQuery, saveQuery, setEditingQuery } = useApp();
-  // Every hook must run before the early return below, or React sees a different hook
-  // count between the closed and open states and throws error #310. The parent keys this
-  // component on the query id, so the initial state is re-derived when the target changes.
+  // The parent mounts this only while the editor is open and keys it on the target query,
+  // so the initial state below is derived once per open. The guard further down is a
+  // belt-and-braces check; every hook still has to run before it, or React would see a
+  // different hook count between renders and throw error #310.
   const [form, setForm] = useState(() => ({
     name: editingQuery?.name || '',
     description: editingQuery?.description || '',
@@ -20,6 +24,9 @@ const QueryEditorModal = () => {
     table: editingQuery?.table || 'Custom',
     tags: (editingQuery?.tags || []).join(', '),
   }));
+  // The detection block is kept as its own form state: it is edited as text (comma and
+  // newline separated lists) and only converted to the schema shape on save.
+  const [meta, setMeta] = useState(() => metadataToForm(editingQuery));
   const [errors, setErrors] = useState({});
   // Whether Tab in the KQL box indents instead of moving focus. See handleQueryKeyDown.
   const [tabIndents, setTabIndents] = useState(true);
@@ -71,6 +78,16 @@ const QueryEditorModal = () => {
 
   // Clearing on edit rather than only on the next save attempt: aria-invalid and the
   // message below the field would otherwise keep asserting an error the user has fixed.
+  /** Move the caret to the start of a line in the KQL box, so a lint finding is actionable. */
+  const jumpToLine = (line) => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const lines = form.query.split('\n');
+    const index = lines.slice(0, Math.max(0, line - 1)).reduce((n, l) => n + l.length + 1, 0);
+    ta.focus();
+    ta.setSelectionRange(index, index + (lines[line - 1]?.length ?? 0));
+  };
+
   const updateField = (field, val) => {
     setForm((p) => ({ ...p, [field]: val }));
     setErrors((p) => (p[field] ? { ...p, [field]: undefined } : p));
@@ -87,6 +104,7 @@ const QueryEditorModal = () => {
       name: form.name.trim(), description: form.description.trim(), query: form.query,
       category: form.category, table: form.table, tags,
       favorite: editingQuery.favorite || false, usageCount: editingQuery.usageCount || 0,
+      ...formToMetadata(meta),
     });
     setEditingQuery(null);
   };
@@ -152,6 +170,7 @@ const QueryEditorModal = () => {
               : 'Tab now moves to the next field. Typing here, or leaving and coming back, restores Tab indentation.'}
           </p>
           {errors.query && <p id={ids.queryError} role="alert" className={errorCls} style={errorSty}>{errors.query}</p>}
+          <LintPanel query={form.query} onJumpToLine={jumpToLine} />
         </div>
         {form.query && (
           <div>
@@ -193,6 +212,8 @@ const QueryEditorModal = () => {
           <input id={ids.tags} className={inputCls} style={inputSty} value={form.tags}
             onChange={(e) => updateField('tags', e.target.value)} placeholder="powershell, lolbins, t1059" />
         </div>
+
+        <DetectionMetadataFields value={meta} onChange={setMeta} />
       </div>
       <div className="flex justify-end gap-3 mt-6">
         <button onClick={() => setEditingQuery(null)}

@@ -557,7 +557,11 @@ export default function App() {
         {/* Overlays */}
         <ToastContainer />
         <KeyboardHelp />
-        <QueryEditorModal />
+        {/* Mounted only while open, and keyed on the target query. Rendering it
+            unconditionally left it mounted with `return null` inside, so its form state
+            survived close/reopen: a draft leaked into the next new query, and opening an
+            existing query showed the previous draft instead of that query's contents. */}
+        {editingQuery && <QueryEditorModal key={editingQuery.id ?? 'new'} />}
         <ImportPreviewModal />
         <BulkActionBar />
 

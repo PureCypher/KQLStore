@@ -12,7 +12,7 @@
 #      API — better-sqlite3's db.backup() — which takes a consistent snapshot and
 #      restarts itself if a writer moves underneath it.
 #
-#   2. The image has no sqlite3 CLI. `which sqlite3` in node:22-alpine returns nothing,
+#   2. The image has no sqlite3 CLI. `which sqlite3` in node:24-alpine returns nothing,
 #      so the .backup dot-command is not an option; the Node API is.
 #
 #   3. `node -e` resolves require() from the working directory, not from a script's

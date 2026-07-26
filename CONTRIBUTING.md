@@ -68,25 +68,29 @@ The suite grows with every feature, so no count is quoted here — `npm test` pr
 is enforced for `src/domain` and `src/lib` only: those modules are pure, they carry the logic that
 has actually broken in this repository, and UI coverage is a separate problem.
 
-**API** — Node's built-in test runner, no extra dependencies, from inside `api/`. It needs a Node
-that `better-sqlite3` ships a prebuild for. If your host Node is newer, run the suite in a
-container, which is what CI effectively does:
+**API** — Node's built-in test runner, no extra dependencies, from inside `api/`. `better-sqlite3`
+11.x publishes prebuilds only up to the Node 22 ABI; on Node 24 it compiles from source instead,
+which is why the container below installs a toolchain. If your host Node is outside the supported
+range, run the suite in a container, which is what CI effectively does:
 
 ```bash
-docker run --rm -v "$PWD/api":/app -w /app node:22-alpine sh -c \
+# Mount the repository root, not api/ — test/schema-version.test.js reads src/constants.js
+# from the root to prove the API and the SPA agree on the schema version. Mounting only
+# api/ makes that one test fail with ENOENT.
+docker run --rm -v "$PWD":/repo -w /repo/api node:24-alpine sh -c \
   'apk add --no-cache python3 make g++ >/dev/null 2>&1; npm ci --silent; node --test "test/**/*.test.js"'
 # ...
-# # tests 47
-# # pass 47
+# # tests 49
+# # pass 49
 # # fail 0
 ```
 
-On a host already running Node 22, the same thing without the container:
+On a host already running Node 20–24, the same thing without the container:
 
 ```bash
 cd api
 npm ci
-node --test "test/**/*.test.js"     # 47 tests across 6 files
+node --test "test/**/*.test.js"     # 49 tests across 7 files
 ```
 
 Two details about that command, both of which have cost time before:
@@ -94,7 +98,7 @@ Two details about that command, both of which have cost time before:
 - **Quote the glob.** Node expands it, not the shell — busybox `sh` has no recursive `**`, and
   `node --test test/` looks like it should work but does not: given a positional path, Node resolves
   it as a module rather than scanning it and fails with `MODULE_NOT_FOUND`.
-- **A bare `node --test` reports 48, not 47.** Node's default patterns include everything under
+- **A bare `node --test` reports 50, not 49.** Node's default patterns include everything under
   `test/`, so `test/helpers.js` is loaded as a test file and counted as one passing test despite
   containing none. The glob above is what CI runs and is the honest number.
 

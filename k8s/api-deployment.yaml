@@ -55,7 +55,7 @@ spec:
             - name: DB_PATH
               value: /data/kqlstore.db
             # Node does NOT size its heap from the cgroup limit here. Measured on
-            # node:22-alpine with a 128 MiB limit, V8 still reports a heap ceiling of
+            # node:24-alpine with a 128 MiB limit, V8 still reports a heap ceiling of
             # 259 MiB — roughly twice what the cgroup allows. V8 would therefore keep
             # growing the old space instead of collecting, and the kernel would OOMKill
             # the pod before V8 ever felt pressure. The failure looks like a random

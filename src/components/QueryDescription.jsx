@@ -1,3 +1,4 @@
+import { ChevronUp, ChevronDown } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 const QueryDescription = React.memo(({ description, maxCollapsedLines = 3, className }) => {

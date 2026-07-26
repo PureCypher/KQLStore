@@ -21,7 +21,16 @@ const LIMITS = {
   tagLength: 50,
   tagCount: 20,
   importItems: 1000,
+  id: 200,
+  // Long enough for any ISO 8601 variant with an offset; short enough that a caller
+  // cannot smuggle a payload through a timestamp column.
+  timestamp: 64,
+  // Upper bound for ?limit=. A full store is a few thousand rows, so this is generous
+  // while still stopping a single request from materialising an unbounded result set.
+  pageSize: 1000,
 };
+
+const IMPORT_MODES = ['insert', 'upsert'];
 
 function badRequest(message) {
   const err = new Error(message);
@@ -104,4 +113,87 @@ function validateQueryPayload(body, { partial = false } = {}) {
   return out;
 }
 
-module.exports = { validateQueryPayload, badRequest, CATEGORIES, LIMITS };
+/**
+ * Validate the identity and timestamp fields that ride along with a sync payload.
+ * validateQueryPayload deliberately ignores them (they are not user-editable content),
+ * so before this existed /import passed q.id, q.created and q.updated straight to the
+ * statement binder: an object or number there threw inside the transaction and turned
+ * one malformed item into a 500 for the whole batch instead of a per-item rejection.
+ * They also decide who wins an upsert, so they must be strings we can reason about.
+ */
+function validateSyncFields(body) {
+  const out = {};
+
+  const id = checkString(body.id, 'id', LIMITS.id, { required: false });
+  if (id !== undefined) {
+    if (id.trim().length === 0) throw badRequest('"id" must not be empty');
+    out.id = id;
+  }
+
+  const created = checkString(body.created, 'created', LIMITS.timestamp, { required: false });
+  if (created !== undefined) out.created = created;
+
+  const updated = checkString(body.updated, 'updated', LIMITS.timestamp, { required: false });
+  if (updated !== undefined) out.updated = updated;
+
+  return out;
+}
+
+/**
+ * Import mode selector. Unknown values are rejected rather than defaulting to "insert":
+ * a typo in a sync client would otherwise silently fall back to the mode that discards
+ * updates, which is exactly the failure this option exists to prevent.
+ */
+function validateImportMode(value) {
+  if (value === undefined || value === null) return 'insert';
+  if (typeof value !== 'string' || !IMPORT_MODES.includes(value)) {
+    throw badRequest(`"mode" must be one of: ${IMPORT_MODES.join(', ')}`);
+  }
+  return value;
+}
+
+/**
+ * The optimistic-concurrency precondition on PUT. Opt-in: absent means "last write wins",
+ * which is what the SPA still does.
+ */
+function validateExpectedUpdated(value) {
+  if (value === undefined || value === null) return undefined;
+  const expected = checkString(value, 'expectedUpdated', LIMITS.timestamp, { required: false });
+  if (expected.trim().length === 0) throw badRequest('"expectedUpdated" must not be empty');
+  return expected;
+}
+
+/** Query-string integers arrive as strings, or as arrays/objects if repeated or nested. */
+function parseBoundedInt(raw, field, min, max) {
+  if (raw === undefined || raw === '') return undefined;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    throw badRequest(`"${field}" must be a non-negative integer`);
+  }
+  const n = Number(raw);
+  if (n < min || n > max) throw badRequest(`"${field}" must be between ${min} and ${max}`);
+  return n;
+}
+
+/**
+ * Optional paging for GET /api/queries. Both absent means "return everything", which is
+ * the behaviour the SPA depends on — it holds the whole store in memory and filters
+ * client-side.
+ */
+function validatePagination(query) {
+  return {
+    limit: parseBoundedInt(query.limit, 'limit', 1, LIMITS.pageSize),
+    offset: parseBoundedInt(query.offset, 'offset', 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+module.exports = {
+  validateQueryPayload,
+  validateSyncFields,
+  validateImportMode,
+  validateExpectedUpdated,
+  validatePagination,
+  badRequest,
+  CATEGORIES,
+  IMPORT_MODES,
+  LIMITS,
+};

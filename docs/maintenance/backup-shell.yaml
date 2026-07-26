@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------
+# Throwaway maintenance pod for the query store's volumes.
+#
+# It exists because neither running workload can do these jobs:
+#   - The API pod mounts /data but NOT the backup claim, so `kubectl cp` cannot
+#     reach the nightly backups through it.
+#   - The backup CronJob's pods mount both, but they exit in seconds; `kubectl cp`
+#     needs a container that is still running.
+#
+# Two uses, described in README.md:
+#   1. Pull backups off the node.       kubectl -n kqlstore cp kqlstore-maint:/backup ./kqlstore-backups
+#   2. Restore a backup over the store. Scale the API to 0 FIRST — see below.
+#
+# NOT part of the deployment: it is deliberately absent from k8s/kustomization.yaml
+# so it is never left running. Apply it, use it, delete it.
+#
+# Change the image to match your registry, exactly as in k8s/api-deployment.yaml.
+# It reuses the API image on purpose: that is the only image known to carry a
+# better-sqlite3 build matching this database, should you need to inspect one.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kqlstore-maint
+  namespace: kqlstore
+  labels:
+    # Labelled as the backup workload, not the API: app=kqlstore-api is the API
+    # Service's selector, and adopting it would make Kubernetes load-balance live
+    # traffic into a pod that serves no HTTP. This label also picks up the deny-all
+    # NetworkPolicy that ships beside the CronJob, so the pod gets no network.
+    app: kqlstore-api-backup
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  # MUST land on the API's node. Both claims are ReadWriteOnce on node-local
+  # local-path storage, so a pod scheduled anywhere else stays Pending forever with
+  # "node(s) had volume node affinity conflict".
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: kqlstore-api
+          topologyKey: kubernetes.io/hostname
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: shell
+      image: 192.168.1.76:5001/kqlstore-api:latest
+      # Long enough to finish a copy, short enough that a forgotten pod cleans itself
+      # up rather than holding a mount on the API's node indefinitely.
+      command: ["sleep", "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      volumeMounts:
+        # Read-only: pulling backups off the node must not be able to damage them.
+        - name: backup
+          mountPath: /backup
+          readOnly: true
+        # Writable, because restoring means replacing this file. Scale the API to 0
+        # before writing here: two processes with the same SQLite file open, one of
+        # them replacing it underneath the other, is how a store gets corrupted.
+        #   kubectl -n kqlstore scale deploy/kqlstore-api --replicas=0
+        #   kubectl -n kqlstore exec kqlstore-maint -- sh -c '
+        #     rm -f /data/kqlstore.db /data/kqlstore.db-wal /data/kqlstore.db-shm &&
+        #     cp /backup/kqlstore-<stamp>Z.db /data/kqlstore.db'
+        #   kubectl -n kqlstore scale deploy/kqlstore-api --replicas=1
+        # The -wal and -shm sidecars must go with the old database; leaving them
+        # behind lets SQLite replay them over the copy you just restored.
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: backup
+      persistentVolumeClaim:
+        claimName: kqlstore-api-backup
+    - name: data
+      persistentVolumeClaim:
+        claimName: kqlstore-api-data
+    - name: tmp
+      emptyDir: {}

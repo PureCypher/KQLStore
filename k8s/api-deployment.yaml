@@ -7,9 +7,26 @@ metadata:
     app: kqlstore-api
     app.kubernetes.io/managed-by: kustomize
 spec:
+  # THIS MUST NEVER BE SCALED ABOVE 1.
+  #
+  # The store is a single SQLite file on a ReadWriteOnce PVC. Two consequences, either
+  # of which is enough on its own:
+  #   1. RWO binds the volume to one node. A second replica scheduled elsewhere never
+  #      mounts it and sits ContainerCreating forever.
+  #   2. Worse, two replicas that did land on the same node would both open the same
+  #      database file from separate processes. SQLite's WAL locking is per-file, so
+  #      writes would serialise on a 5s busy_timeout (see api/db.js) and callers would
+  #      start seeing SQLITE_BUSY under any real concurrency.
+  # Scaling out requires replacing SQLite with a networked database, not more replicas.
   replicas: 1
+  # Recreate, not RollingUpdate, for the same reason: a rolling update would briefly run
+  # old and new pods together, and the new one cannot attach an RWO volume the old pod
+  # still holds. The rollout would deadlock. The cost is a few seconds of downtime per
+  # deploy, which is the correct trade for a single-writer datastore.
   strategy:
     type: Recreate
+  # Old ReplicaSets are just stored pod templates; keep enough to roll back, no more.
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: kqlstore-api
@@ -18,6 +35,10 @@ spec:
       labels:
         app: kqlstore-api
     spec:
+      # The API talks only to its own SQLite file — never to the Kubernetes API — so a
+      # mounted ServiceAccount token would only serve to hand a cluster credential to
+      # anyone who achieved RCE in the container.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -33,6 +54,20 @@ spec:
           env:
             - name: DB_PATH
               value: /data/kqlstore.db
+            # Node does NOT size its heap from the cgroup limit here. Measured on
+            # node:22-alpine with a 128 MiB limit, V8 still reports a heap ceiling of
+            # 259 MiB — roughly twice what the cgroup allows. V8 would therefore keep
+            # growing the old space instead of collecting, and the kernel would OOMKill
+            # the pod before V8 ever felt pressure. The failure looks like a random
+            # restart under load, not a memory error, which makes it miserable to
+            # diagnose.
+            #
+            # Capping the heap below the limit makes V8 collect instead of die. 96 MiB
+            # of a 128 MiB limit leaves ~32 MiB for the things the heap cap does not
+            # cover: better-sqlite3's native allocations and page cache, Buffers, thread
+            # stacks and the binary itself. Raise both numbers together, never just one.
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=96
             # API_TOKEN is deliberately NOT set. Access control is layered elsewhere:
             #   1. Cloudflare Access authenticates every external request at the edge,
             #      before it reaches the cluster. This is the user-facing authn/authz.
@@ -65,17 +100,38 @@ spec:
             capabilities:
               drop:
                 - ALL
+          # Startup is where this pod is most fragile: api/db.js opens the database,
+          # sets WAL, creates the table and may run the usage_count migration before the
+          # listener binds. On a cold local-path volume that is disk-bound and variable.
+          # The startupProbe gives it up to 60s (30 x 2s) while holding the liveness
+          # probe off, so a slow migration cannot be mistaken for a hang and killed
+          # halfway through — restarting mid-migration repeatedly is how a crash loop
+          # turns into a corrupted store. Once startup succeeds the liveness probe takes
+          # over on its normal cadence, and initialDelaySeconds is no longer needed.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            periodSeconds: 2
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /api/health
               port: 3000
-            initialDelaySeconds: 10
             periodSeconds: 30
+          # Readiness deliberately stays on /api/health rather than the /api/health/ready
+          # that api/routes/health.js also exposes. That endpoint returns 503 when the
+          # database is readable but not writable (full or read-only PVC), and its comment
+          # invites a readinessProbe — but pulling a pod out of the Service only helps when
+          # another replica can absorb the traffic. replicas is pinned at 1 above, so a 503
+          # would empty the Service's endpoint list, nginx's proxy_pass would start
+          # returning 502, and a store where reads still worked perfectly would go entirely
+          # dark. Degraded-but-serving is the better failure mode for a single writer.
+          # Switch to /api/health/ready only if this ever becomes a multi-replica database.
           readinessProbe:
             httpGet:
               path: /api/health
               port: 3000
-            initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:
             - name: data

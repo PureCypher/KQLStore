@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { X, Activity, Database, AlertTriangle, Shield, Trash2, Eye, EyeOff, Zap } from 'lucide-react';
-import { STORAGE_KEY, BACKUP_KEY, CURRENT_SCHEMA_VERSION } from '../constants.js';
+import React, { useState, useEffect } from 'react';
+import { X, Database, AlertTriangle, Shield, Eye } from 'lucide-react';
+import { CURRENT_SCHEMA_VERSION } from '../constants.js';
 import { safeJsonParse } from '../lib/json.js';
 import { StorageAdapter } from '../storage/adapter.js';
 import { operationLog } from '../storage/opLog.js';

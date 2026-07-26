@@ -1,7 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  CATEGORIES, STORAGE_KEY, BACKUP_KEY, HEALTH_TEST_KEY, CURRENT_SCHEMA_VERSION,
-  SAVE_DEBOUNCE_MS, BACKUP_THROTTLE_MS,
+  CATEGORIES,
+  STORAGE_KEY,
+  BACKUP_KEY,
+  HEALTH_TEST_KEY,
+  CURRENT_SCHEMA_VERSION,
+  SAVE_DEBOUNCE_MS,
+  BACKUP_THROTTLE_MS,
 } from '../constants.js';
 import { generateId } from '../lib/id.js';
 import { safeJsonParse } from '../lib/json.js';
@@ -10,7 +15,6 @@ import { migrateData } from '../domain/migrate.js';
 import { simpleHash } from '../domain/hash.js';
 import { getTableGroup, getTableDisplayName } from '../domain/tables.js';
 import { StorageAdapter, API_RETRY_INTERVAL_MS } from './adapter.js';
-import { operationLog } from './opLog.js';
 
 // ============================================================
 // useKQLStorage Hook (FIXES Finding 6, 8, 12)
@@ -256,7 +260,7 @@ function useKQLStorage() {
       apiAvailableRef.current = true;
       setSavingState('saved');
       setError(null);
-    } catch (err) {
+    } catch {
       apiAvailableRef.current = false;
       setSavingState('error');
       setError('Save failed — stored locally only. Changes may be lost if you clear browser data.');

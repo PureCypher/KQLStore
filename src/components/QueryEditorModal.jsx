@@ -7,18 +7,22 @@ import { useApp } from '../context/app.js';
 
 const QueryEditorModal = () => {
   const { editingQuery, saveQuery, setEditingQuery } = useApp();
-  if (!editingQuery) return null;
-  const isNew = !editingQuery.id;
-  const [form, setForm] = useState({
-    name: editingQuery.name || '',
-    description: editingQuery.description || '',
-    query: editingQuery.query || '',
-    category: editingQuery.category || 'Utility',
-    table: editingQuery.table || 'Custom',
-    tags: (editingQuery.tags || []).join(', '),
-  });
+  // Every hook must run before the early return below, or React sees a different hook
+  // count between the closed and open states and throws error #310. The parent keys this
+  // component on the query id, so the initial state is re-derived when the target changes.
+  const [form, setForm] = useState(() => ({
+    name: editingQuery?.name || '',
+    description: editingQuery?.description || '',
+    query: editingQuery?.query || '',
+    category: editingQuery?.category || 'Utility',
+    table: editingQuery?.table || 'Custom',
+    tags: (editingQuery?.tags || []).join(', '),
+  }));
   const [errors, setErrors] = useState({});
   const taRef = useRef(null);
+
+  if (!editingQuery) return null;
+  const isNew = !editingQuery.id;
 
   const handleTabKey = (e) => {
     if (e.key === 'Tab') {

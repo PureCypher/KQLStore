@@ -3,3 +3,4 @@ npm-debug.log
 *.db
 *.db-wal
 *.db-shm
+test

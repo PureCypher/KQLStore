@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { useApp } from '../context/app.js';
 
 const ImportPreviewModal = () => {
-  const { confirmImport, importPreview, queries, setImportPreview } = useApp();
+  const { confirmImport, importPreview, setImportPreview } = useApp();
   if (!importPreview) return null;
   const { preview } = importPreview;
   const statusColors = { add: '#00ff88', skip: '#888', duplicate: '#ffcc00', error: '#ff4444' };

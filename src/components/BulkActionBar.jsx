@@ -5,9 +5,10 @@ import { useApp } from '../context/app.js';
 
 const BulkActionBar = () => {
   const { handleBulkCategory, handleBulkDelete, handleBulkExport, handleBulkTable, selectedIds, setSelectedIds } = useApp();
-  if (selectedIds.size === 0) return null;
+  // Hooks before the early return — see QueryEditorModal for the same constraint.
   const [showCatMenu, setShowCatMenu] = useState(false);
   const [showTableMenu, setShowTableMenu] = useState(false);
+  if (selectedIds.size === 0) return null;
   return (
     <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl font-mono text-sm"
       style={{ background: '#1a1a2e', border: '1px solid #2a2a3e' }}>

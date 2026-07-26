@@ -1,0 +1,37 @@
+# Every manifest here carries app.kubernetes.io/managed-by: kustomize, which was a
+# claim with nothing behind it until this file existed. `kubectl apply -k k8s/` is now
+# the supported way to deploy the whole stack.
+#
+# The order below is grouped for reading, not for apply ordering: kustomize v5 sorts its
+# output by kind (Namespace, then Service, PVC, Deployment, and so on) regardless of how
+# resources are listed here. That built-in ordering already puts the namespace and the
+# claims ahead of the workloads that need them, so a first apply converges without help.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kqlstore
+
+resources:
+  - namespace.yaml
+  # Storage
+  - api-pvc.yaml
+  - api-backup-pvc.yaml
+  # Backend
+  - api-deployment.yaml
+  - api-service.yaml
+  # Frontend
+  - deployment.yaml
+  - service.yaml
+  # Everything else: network rules and the nightly backup (which carries its own
+  # deny-all NetworkPolicy alongside the CronJob).
+  - api-networkpolicy.yaml
+  - api-backup-cronjob.yaml
+
+# Applied on top of the labels each manifest already declares. commonLabels also injects
+# into selectors, which would rewrite the immutable spec.selector of the existing
+# Deployments and break `apply` on a live cluster — labels: with includeSelectors
+# omitted (defaulting false) sets metadata labels only and is safe to add to a running
+# deployment.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: kqlstore

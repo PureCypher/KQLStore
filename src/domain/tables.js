@@ -22,7 +22,7 @@ function detectTableFromQuery(queryBody) {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('let ') || trimmed.startsWith('|')) continue;
-    const firstWord = trimmed.split(/[\s|(\[]/)[0];
+    const firstWord = trimmed.split(/[\s|([]/)[0];
     if (!firstWord) continue;
     if (ALL_KNOWN_TABLES.includes(firstWord)) return firstWord;
     if (firstWord.endsWith('_CL') || firstWord.endsWith('_CF')) return 'Custom:' + firstWord;

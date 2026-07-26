@@ -1,16 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import {
-  Search, Plus, Copy, Check, Pencil, Trash2, Star, Download, Upload,
-  Filter, ChevronDown, ChevronUp, X, Keyboard, Terminal, Menu,
-  Clock, Tag, Layers, Square, CheckSquare, Eye, EyeOff,
-  Activity, Database, AlertTriangle, Shield, Zap,
-} from 'lucide-react';
-import {
-  CATEGORIES, CATEGORY_COLORS, SENTINEL_TABLES, DEFENDER_TABLES, TABLE_STYLES,
-  SORT_OPTIONS, STORAGE_KEY, BACKUP_KEY, CURRENT_SCHEMA_VERSION,
-} from './constants.js';
+import { Search, Plus, Download, Upload, Filter, X, Keyboard, Terminal, Database, AlertTriangle } from 'lucide-react';
+import { CATEGORIES, BACKUP_KEY, CURRENT_SCHEMA_VERSION } from './constants.js';
 import { generateId } from './lib/id.js';
-import { getTableGroup, getTableDisplayName } from './domain/tables.js';
+import { getTableDisplayName } from './domain/tables.js';
 import { validateQuery } from './domain/validate.js';
 import { migrateData } from './domain/migrate.js';
 import { simpleHash } from './domain/hash.js';
@@ -19,9 +11,7 @@ import { StorageAdapter } from './storage/adapter.js';
 import { useKQLStorage } from './storage/useKQLStorage.js';
 import { useDebounce } from './hooks/useDebounce.js';
 import { ToastContext } from './context/toast.js';
-import { HighlightedCode } from './components/HighlightedCode.jsx';
 import { StorageInspector } from './components/StorageInspector.jsx';
-import { TableSelector } from './components/TableSelector.jsx';
 import { AppContext } from './context/app.js';
 import { ToastContainer } from './components/ToastContainer.jsx';
 import { KeyboardHelp } from './components/KeyboardHelp.jsx';
@@ -35,8 +25,13 @@ import { SavingIndicator } from './components/SavingIndicator.jsx';
 export default function App() {
   const storage = useKQLStorage();
   const {
-    queries, setQueries, isLoading, error: storageError, setError: setStorageError,
-    persistQueries, savingState, lastSavedTimestamp, backupTimestamp, stats,
+    queries,
+    isLoading,
+    error: storageError,
+    setError: setStorageError,
+    savingState,
+    lastSavedTimestamp,
+    stats,
   } = storage;
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -341,13 +336,43 @@ export default function App() {
   }, [queries, debouncedSearch, selectedCategory, selectedTable, selectedTags, showFavoritesOnly, sortBy, sortDir]);
 
   // --- Clipboard ---
+  // navigator.clipboard only exists in a secure context. Over plain HTTP on a non-localhost
+  // origin — exactly what the k8s manifests serve without a TLS-terminating proxy in front —
+  // it is undefined, so this threw a TypeError that the bare catch turned into a useless
+  // "Failed to copy". Copy is the app's primary action, so it degrades instead of failing:
+  // the execCommand path still works without a secure context, and if both fail the message
+  // names the actual cause.
   const copyToClipboard = useCallback(async (text, queryId) => {
+    const legacyCopy = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      // Keep it off-screen and non-focusable-looking so the page does not jump.
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        return document.execCommand('copy');
+      } finally {
+        ta.remove();
+      }
+    };
+
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else if (!legacyCopy()) {
+        throw new Error('execCommand copy rejected');
+      }
       if (queryId) incrementUsage(queryId);
       addToast('Copied to clipboard!', 'success');
     } catch {
-      addToast('Failed to copy', 'error');
+      addToast(
+        window.isSecureContext
+          ? 'Failed to copy'
+          : 'Clipboard blocked — serve this page over HTTPS or via localhost',
+        'error',
+      );
     }
   }, [incrementUsage, addToast]);
 
@@ -365,7 +390,6 @@ export default function App() {
   }, []);
 
   const hasActiveFilters = selectedCategory || selectedTable || selectedTags.length > 0 || showFavoritesOnly || debouncedSearch;
-
 
   // Every value the hoisted shell components read. Memoised so the identity only changes
   // when something they actually use changes.
@@ -411,8 +435,6 @@ export default function App() {
       </div>
     );
   }
-
-
 
   // ============================================================
   // Main Render

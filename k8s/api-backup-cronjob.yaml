@@ -1,0 +1,218 @@
+# Daily online backup of the SQLite query store.
+#
+# The entire store is one file on a node-pinned local-path volume. Everything below
+# exists because of three constraints that are easy to get wrong:
+#
+#   1. The database is in WAL mode (api/db.js sets journal_mode = WAL). A plain
+#      `cp kqlstore.db` copies neither the -wal nor the -shm sidecar, so it silently
+#      drops every transaction committed since the last checkpoint, and because cp is
+#      not atomic it can also tear pages mid-write and produce an inconsistent file.
+#      Measured against a live writer here, the main .db held 2.5 MB while the WAL held
+#      a further 4 MB of committed data. The correct method is SQLite's online backup
+#      API — better-sqlite3's db.backup() — which takes a consistent snapshot and
+#      restarts itself if a writer moves underneath it.
+#
+#   2. The image has no sqlite3 CLI. `which sqlite3` in node:22-alpine returns nothing,
+#      so the .backup dot-command is not an option; the Node API is.
+#
+#   3. `node -e` resolves require() from the working directory, not from a script's
+#      location. workingDir must therefore be /app, where the API image keeps its
+#      node_modules. A script mounted at /data would fail with MODULE_NOT_FOUND.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kqlstore-api-backup
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # 03:17 rather than a round hour, to avoid landing on top of every other cron in the
+  # cluster. UK local time so the quiet window tracks the maintainer's night through
+  # BST/GMT rather than drifting an hour twice a year.
+  schedule: "17 3 * * *"
+  timeZone: Europe/London
+  # One backup at a time. A run that overruns must not have a second run open a second
+  # reader and start competing for the same volume.
+  concurrencyPolicy: Forbid
+  # If the controller was down at 03:17, still run when it comes back — but only if it
+  # returns within the hour, otherwise skip to the next scheduled slot rather than
+  # firing a stale job at an arbitrary time of day.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Two attempts, then leave the Job Failed so it is visible. Retrying forever would
+      # hide a persistently broken backup behind a permanently "active" job.
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: kqlstore-api-backup
+        spec:
+          restartPolicy: OnFailure
+          # Nothing here talks to the Kubernetes API.
+          automountServiceAccountToken: false
+          # MUST run on the same node as the API pod.
+          #
+          # The data volume is ReadWriteOnce, which binds it to a single NODE (not a
+          # single pod — pods co-located on that node may all mount it). local-path
+          # storage pins it harder still: the directory only exists on the node that
+          # provisioned it. A backup pod scheduled anywhere else stays Pending forever
+          # with "node(s) had volume node affinity conflict", and the failure is
+          # invisible until someone needs a restore.
+          #
+          # Anchoring to the API pod rather than a hardcoded nodeName means this keeps
+          # working if the API is ever rescheduled.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app: kqlstore-api
+                  topologyKey: kubernetes.io/hostname
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              # Deliberately the same image as the API: it is the only image known to
+              # carry a better-sqlite3 build matching this database, and pinning a
+              # second image would let the two drift apart.
+              image: 192.168.1.76:5001/kqlstore-api:latest
+              imagePullPolicy: Always
+              # See note (3) above — this is what makes require('better-sqlite3') resolve.
+              workingDir: /app
+              env:
+                - name: DB_PATH
+                  value: /data/kqlstore.db
+                - name: BACKUP_DIR
+                  value: /backup
+                - name: RETENTION_DAYS
+                  value: "14"
+                # Same reasoning as the API deployment: V8 does not derive its heap
+                # ceiling from the cgroup limit, so cap it below the limit or the pod is
+                # OOMKilled instead of collecting.
+                - name: NODE_OPTIONS
+                  value: --max-old-space-size=96
+              command:
+                - node
+                - -e
+                - |
+                  const Database = require('better-sqlite3');
+                  const fs = require('fs');
+                  const path = require('path');
+
+                  const src = process.env.DB_PATH;
+                  const dir = process.env.BACKUP_DIR;
+                  const keepDays = Number(process.env.RETENTION_DAYS || 14);
+                  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+                  const dest = path.join(dir, `kqlstore-${stamp}Z.db`);
+
+                  // Opened read-only so a defect in this script can never write to the
+                  // live store. This is the real safety boundary — not the mount flag,
+                  // which cannot be :ro here (see the volumeMount comment below).
+                  const db = new Database(src, { readonly: true });
+
+                  db.backup(dest)
+                    .then(() => {
+                      db.close();
+                      // Take the copy out of WAL mode so each backup is one
+                      // self-contained file with no -wal/-shm sidecars to keep together,
+                      // then prove it actually opens and reads before trusting it.
+                      const copy = new Database(dest);
+                      copy.pragma('journal_mode = DELETE');
+                      const integrity = copy.pragma('integrity_check', { simple: true });
+                      const rows = copy.prepare('SELECT COUNT(*) AS n FROM queries').get().n;
+                      copy.close();
+                      if (integrity !== 'ok') throw new Error(`integrity_check returned ${integrity}`);
+                      console.log(`backup ok: ${dest} (${fs.statSync(dest).size} bytes, ${rows} queries)`);
+
+                      // Prune only after a verified good backup exists, so a run that
+                      // fails can never erode the retention window on its way out.
+                      const cutoff = Date.now() - keepDays * 86400000;
+                      for (const name of fs.readdirSync(dir)) {
+                        if (!/^kqlstore-.*\.db$/.test(name)) continue;
+                        const p = path.join(dir, name);
+                        if (fs.statSync(p).mtimeMs < cutoff) {
+                          fs.unlinkSync(p);
+                          console.log(`pruned: ${p}`);
+                        }
+                      }
+                    })
+                    .catch((err) => {
+                      console.error(`backup failed: ${err.message}`);
+                      process.exit(1);
+                    });
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                # NOT readOnly, despite this being a read-only workload.
+                #
+                # SQLite cannot open a WAL database without write access to its -shm
+                # index. It has a fallback for read-only media, but that only works while
+                # another connection already holds the -shm open. Verified both ways: with
+                # the API running, a :ro mount succeeds; with the API stopped and no -shm
+                # present, it fails with "unable to open database file". That would make
+                # the backup silently dependent on the API being up — failing exactly
+                # during a restart, an outage or a node reboot, which is when a good
+                # backup matters most.
+                #
+                # Write access is therefore required. The read-only guarantee comes from
+                # the { readonly: true } open above plus the container securityContext.
+                - name: data
+                  mountPath: /data
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: kqlstore-api-data
+            - name: backup
+              persistentVolumeClaim:
+                claimName: kqlstore-api-backup
+            - name: tmp
+              emptyDir: {}
+---
+# The backup pod is labelled app: kqlstore-api-backup, NOT app: kqlstore-api — the API
+# Service selects on the latter, so reusing it would make Kubernetes load-balance live
+# API traffic into a batch job that serves no HTTP at all.
+#
+# The consequence is that api-networkpolicy.yaml does not select these pods, which in a
+# namespace with policies present would otherwise leave them unrestricted. This job only
+# ever touches two local filesystems, so it gets no network in either direction.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-api-backup
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: kqlstore-api-backup
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []

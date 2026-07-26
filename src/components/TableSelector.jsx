@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Database } from 'lucide-react';
-import { SENTINEL_TABLES, DEFENDER_TABLES, TABLE_STYLES, ALL_KNOWN_TABLES } from '../constants.js';
-import { getTableGroup, getTableDisplayName } from '../domain/tables.js';
+import { ChevronDown } from 'lucide-react';
+import { SENTINEL_TABLES, DEFENDER_TABLES, ALL_KNOWN_TABLES } from '../constants.js';
+import { getTableDisplayName } from '../domain/tables.js';
 
 function TableSelector({ value, onChange }) {
   const [search, setSearch] = useState('');

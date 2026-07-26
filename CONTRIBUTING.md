@@ -36,9 +36,19 @@ curl -s http://localhost:3000/api/queries | head -c 400
 ```
 
 To run the API on the host rather than in a container — faster restarts, real stack traces —
-note that `better-sqlite3` 11.x publishes prebuilt binaries for Node 18, 20 and 22 only. On
-anything newer `npm ci` falls back to a node-gyp build that fails; on Node 25 it stops with
-`gyp ERR! not ok`. Use Node 22:
+note how `better-sqlite3` 11.x obtains its binary, because it decides what your host needs:
+
+- **Node 18, 20, 22** — a prebuilt binary is downloaded. Nothing is compiled and no toolchain
+  is needed.
+- **Node 24, 25** — no prebuild exists for these ABIs, so `npm ci` compiles the addon from
+  source. That works, but only if the host has `python3` and a C++ compiler. Without them it
+  stops at `gyp ERR! find Python`, which reads like a version problem and is not one — the
+  same Node succeeds once the toolchain is installed.
+- **Node 26** — does not build at all, with or without a toolchain. 11.x calls
+  `v8::Object::GetPrototype`, `v8::Context::GetIsolate` and `PropertyCallbackInfo::This`, all
+  removed in Node 26. `engines` excludes it for this reason.
+
+Any Node from 20 up to and including 24 is fine — 24 is what the image ships:
 
 ```bash
 cd api

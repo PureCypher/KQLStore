@@ -31,10 +31,9 @@ concurrency:
 
 env:
   # Matches the Active LTS line both images are built on (see Dockerfile / api/Dockerfile).
-  # better-sqlite3 11.x has no prebuild for this ABI, so the API install compiles it from
-  # source on the runner — that works (ubuntu-latest carries python3 and build-essential)
-  # and adds roughly a minute. Do not raise this to Node 26 without also moving
-  # better-sqlite3: 11.x does not compile against Node 26's V8 headers.
+  # better-sqlite3 13.x ships ABI-independent N-API prebuilds, so nothing is compiled here
+  # and the runner needs no toolchain. Raising this is a release-line decision now rather
+  # than a dependency one — Node 26 works, but is Current until 2026-10-28.
   NODE_VERSION: '24'
 
 jobs:
@@ -101,9 +100,9 @@ jobs:
           cache-dependency-path: api/package-lock.json
 
       # Unconditional: npm ci fails when package.json and package-lock.json have
-      # drifted, which is worth catching on its own. It also proves better-sqlite3
-      # still produces a loadable binding for this Node major — by prebuild where one
-      # exists, and by compiling from source where one does not.
+      # drifted, which is worth catching on its own. It also proves better-sqlite3 still
+      # resolves a usable prebuild for this Node major — the image build asserts the same
+      # thing more directly, by loading the binding (see api/Dockerfile).
       - name: Install dependencies
         run: npm ci
 

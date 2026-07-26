@@ -9,6 +9,13 @@
 // failure. These limits mirror the SPA's own (KQLStore.jsx validateQuery).
 // ---------------------------------------------------------------------------
 
+// Must track CURRENT_SCHEMA_VERSION in src/constants.js. The export route previously
+// hardcoded 3 while emitting v4 records, so the API advertised a contract it did not
+// honour: a consumer reading schemaVersion 3 would assume the v3 field set and miss the
+// whole detection block. Harmless today only because the v3->v4 migration happens to be
+// idempotent — the next migration that is not would corrupt every re-imported export.
+const SCHEMA_VERSION = 4;
+
 const CATEGORIES = [
   'Detection', 'Hunting', 'Investigation', 'Monitoring', 'Reporting', 'Enrichment', 'Utility',
 ];
@@ -244,4 +251,5 @@ module.exports = {
   CATEGORIES,
   IMPORT_MODES,
   LIMITS,
+  SCHEMA_VERSION,
 };

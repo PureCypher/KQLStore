@@ -6,6 +6,7 @@ const {
   validateSyncFields,
   validateImportMode,
   validateExpectedUpdated,
+  SCHEMA_VERSION,
   validatePagination,
   badRequest,
   LIMITS,
@@ -113,7 +114,7 @@ router.get('/export', (_req, res, next) => {
     const rows = db.prepare('SELECT * FROM queries ORDER BY updated DESC').all();
     const queries = rows.map(toFrontend);
     res.json({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       queries,
       meta: {
         lastUpdated: new Date().toISOString(),

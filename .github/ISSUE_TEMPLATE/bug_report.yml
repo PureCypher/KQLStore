@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in the app or the deployment does not behave as it should.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if a saved query has gone missing or looks wrong, please export
+        your store first (**Export** in the toolbar) and keep the file. It is the only
+        copy of the evidence, and reproducing the fault usually overwrites it.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Numbered steps from a freshly loaded page. If you cannot reproduce it reliably,
+        say so and describe how often it occurs — an intermittent fault is still worth
+        reporting, it just needs different evidence.
+      placeholder: |
+        1. Open the app
+        2. Search for "SigninLogs"
+        3. Type a fourth character
+        4. Focus leaves the search box
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen
+      options:
+        - Query list, search or filtering
+        - Query editor or validation
+        - Import / export
+        - Syntax highlighting
+        - Persistence (queries not saving or reappearing)
+        - Deployment (Kubernetes, nginx, container build)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console output
+      description: >
+        Anything logged to the devtools console around the time of the fault. Rendered
+        as a code block, so no need to add backticks.
+      render: text
+
+  - type: textarea
+    id: api
+    attributes:
+      label: API logs
+      description: >
+        For anything involving saving, loading or import — `kubectl -n kqlstore logs
+        deploy/kqlstore-api`. Redact query contents if they carry anything sensitive.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit SHA or image tag you are running.
+      placeholder: e.g. e0670a3, or 192.168.1.76:5001/kqlstore:latest pulled on 2026-07-20
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      placeholder: e.g. Firefox 141 on Fedora 43
+
+  - type: textarea
+    id: store-size
+    attributes:
+      label: Store size
+      description: >
+        Roughly how many queries are in the store, and is any single one unusually
+        large? Several faults here only appear past a certain size.

@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------------
+# Destination for the off-node backup copy. THE OPERATOR MUST FILL THIS IN.
+#
+# Every value marked REPLACE-ME is a deliberate landmine. api-backup-offsite-cronjob.yaml
+# refuses to run while any of them is still in place and exits non-zero with the list of
+# what is missing, so an unconfigured off-node backup shows up as a failing Job in
+# `kubectl get cronjob` rather than as a green tick over an empty bucket. A backup job
+# that quietly does nothing is worse than no backup job: it manufactures confidence.
+#
+# WHY A CONFIGMAP AND NOT A SECRET
+#
+# Endpoint, bucket and prefix are not credentials — they are the thing you most need to
+# read back when you are restoring at 02:00, and burying them in an opaque Secret helps
+# nobody. The access key and secret key live in a Secret and deliberately do NOT ship in
+# this repository at all; see docs/maintenance/offsite-backup-secret.example.yaml.
+#
+# This file IS part of `kubectl apply -k k8s/`, which means applying the repo overwrites
+# whatever is in the cluster. Edit it here, in git, and apply — do not `kubectl edit` the
+# live ConfigMap, or the next apply will quietly revert your destination. (The Secret is
+# outside kustomize precisely so that the same apply can never revert your credentials.)
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kqlstore-backup-offsite
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-offsite
+    app.kubernetes.io/managed-by: kustomize
+data:
+  # Full URL of the S3-compatible endpoint, including scheme. Examples:
+  #   MinIO on the LAN     http://minio.storage.svc.cluster.local:9000
+  #   Backblaze B2         https://s3.us-west-004.backblazeb2.com
+  #   Cloudflare R2        https://<accountid>.r2.cloudflarestorage.com
+  #   AWS S3               https://s3.eu-west-2.amazonaws.com
+  #
+  # "Off-node" is the bar to clear, and it is lower than "off-site". A MinIO pod on a
+  # different node in this same cluster already survives the failure that destroys the
+  # store today — losing the node the PVC is pinned to. A NAS in the same house survives
+  # more. A cloud bucket survives the house. Pick the tier you will actually maintain,
+  # then write down which failures it does not cover.
+  OFFSITE_ENDPOINT: "REPLACE-ME"
+
+  # Bucket must already exist. The job does not create it: creating buckets needs a
+  # credential far broader than "write objects into this one prefix", and a typo in the
+  # bucket name would silently start a second, invisible backup lineage.
+  OFFSITE_BUCKET: "REPLACE-ME"
+
+  # Key prefix inside the bucket. Safe to share a bucket with other backups; retention
+  # below only ever looks at kqlstore-*.db under this exact prefix.
+  OFFSITE_PREFIX: "kqlstore"
+
+  # rclone's S3 provider dialect. "Other" is the safe generic and works with MinIO,
+  # Garage, SeaweedFS and most self-hosted gateways. Set it accurately where rclone
+  # knows the provider — it changes defaults that matter:
+  #   AWS | Minio | Ceph | Cloudflare | Wasabi | Storj | Other
+  # Notably "AWS" turns OFF path-style addressing (bucket in the hostname); "Other"
+  # leaves it on, which is what nearly every self-hosted gateway needs.
+  OFFSITE_PROVIDER: "Other"
+
+  # Region. MinIO ignores it, B2 and AWS require the real one, R2 wants "auto".
+  OFFSITE_REGION: "us-east-1"
+
+  # Retention at the remote, in days. Longer than the local PVC's 14: the whole point of
+  # the off-node copy is to survive a failure you did not notice quickly, and the class
+  # of mistake that needs a 30-day-old copy (a bad bulk import, a slow-burn corruption)
+  # is exactly the class you find out about late.
+  OFFSITE_RETENTION_DAYS: "30"
+
+  # Floor on the number of remote copies, enforced ahead of the age rule. See the
+  # retention block in api-backup-offsite-cronjob.yaml for the failure this exists to
+  # stop: an outage that outlasts the retention window, followed by one successful run,
+  # ageing out every good copy in a single sweep.
+  OFFSITE_MIN_COPIES: "7"
+
+  # Refuse to upload a local backup older than this. The off-node job reads whatever the
+  # local CronJob last wrote; if that job has been failing, this one would otherwise keep
+  # re-uploading the same stale file and reporting success every night. 26h allows one
+  # missed run plus the BST/GMT shift without nagging.
+  OFFSITE_MAX_AGE_HOURS: "26"
+
+  # Download the object back after upload and prove it is a working SQLite database
+  # (sha256 match, integrity_check, row count) before the job reports success.
+  #
+  # Set to "false" only if you are paying for egress and have decided you would rather
+  # not know. It costs one download of a few megabytes per night; Cloudflare R2 and a
+  # LAN MinIO charge nothing for it. With it off, the guarantee drops to "the transfer
+  # completed and the object is the right size", and the job says so, loudly, in its log.
+  OFFSITE_VERIFY_ROUNDTRIP: "true"

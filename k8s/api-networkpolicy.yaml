@@ -1,0 +1,67 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-api
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # A ClusterIP service is still reachable by every pod in the cluster. The API has
+  # no authentication by default, so this policy is the primary access control:
+  # only the frontend pods may talk to it.
+  podSelector:
+    matchLabels:
+      app: kqlstore-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kqlstore
+      ports:
+        - protocol: TCP
+          port: 3000
+  # The API talks to nothing but its own SQLite file on disk. Denying egress means a
+  # compromised dependency cannot exfiltrate the query store.
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-frontend
+  namespace: kqlstore
+  labels:
+    app: kqlstore
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: kqlstore
+  policyTypes:
+    - Egress
+  egress:
+    # Reach the API service.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kqlstore-api
+      ports:
+        - protocol: TCP
+          port: 3000
+    # nginx resolves the API service name at request time (see nginx.conf), so it
+    # needs DNS. Without this the proxy_pass fails with a resolver timeout.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

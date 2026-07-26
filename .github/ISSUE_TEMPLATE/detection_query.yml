@@ -1,0 +1,159 @@
+name: Detection query submission
+description: Propose a KQL query for the bundled query set.
+labels: ['detection', 'query-submission']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A query is only useful to someone else if they can tell, without running it,
+        whether it will work in their tenant and what it will cost them in triage.
+        The prerequisites and false-positive sections below are what make that
+        possible — a submission without them cannot be reviewed.
+
+        Do not paste anything tenant-specific: no real usernames, hostnames, IP
+        addresses, subscription IDs or workspace names. Use placeholders.
+
+  - type: input
+    id: name
+    attributes:
+      label: Query name
+      description: Short and specific. This is what appears in the query list.
+      placeholder: e.g. Service principal added to privileged directory role
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: What it detects
+      description: >
+        The behaviour being caught, in one or two sentences — the adversary action,
+        not the mechanics of the query.
+    validations:
+      required: true
+
+  - type: textarea
+    id: query
+    attributes:
+      label: The query
+      description: The KQL itself. Rendered as a code block.
+      render: kusto
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Target platform
+      description: >
+        Table schemas diverge between the two — SigninLogs in Sentinel versus
+        AADSignInEventsBeta in Defender XDR, for one. Say which this was written for.
+      options:
+        - Microsoft Sentinel (Log Analytics)
+        - Defender XDR (advanced hunting)
+        - Both, unchanged
+        - Both, but needs a documented tweak (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Must be one of the categories the app supports.
+      options:
+        - Detection
+        - Hunting
+        - Investigation
+        - Monitoring
+        - Reporting
+        - Enrichment
+        - Utility
+    validations:
+      required: true
+
+  - type: input
+    id: tables
+    attributes:
+      label: Tables referenced
+      description: >
+        Every table the query touches, including anything joined or unioned. Comma
+        separated.
+      placeholder: e.g. AuditLogs, IdentityInfo
+    validations:
+      required: true
+
+  - type: input
+    id: attack
+    attributes:
+      label: MITRE ATT&CK technique(s)
+      description: >
+        Technique IDs with sub-techniques where they apply. Use N/A for queries that
+        are operational rather than adversary-facing (health checks, inventory).
+      placeholder: e.g. T1098.003 (Account Manipulation - Additional Cloud Roles)
+    validations:
+      required: true
+
+  - type: textarea
+    id: prerequisites
+    attributes:
+      label: Data source prerequisites
+      description: >
+        What has to be in place before this returns anything: connectors, diagnostic
+        settings, licence tier, agent or device onboarding, and any non-default log
+        category. Include the retention the query assumes — a 90-day lookback against
+        a 30-day workspace silently returns a partial result rather than an error.
+      placeholder: |
+        - Entra ID diagnostic settings sending AuditLogs to the workspace
+        - Entra ID P2 for IdentityInfo enrichment (query still runs without it, the join drops)
+        - Assumes at least 30 days retention
+    validations:
+      required: true
+
+  - type: textarea
+    id: false-positives
+    attributes:
+      label: Known false positives and tuning
+      description: >
+        The benign activity that will match, and how to exclude it. "None known" is a
+        valid answer only if you have actually run this over real data for long enough
+        to say so — please say how long.
+      placeholder: |
+        - Scheduled PIM activations (exclude InitiatedBy app id ...)
+        - Break-glass accounts during DR tests
+        - Run over 30 days in a ~4k-user tenant: 3 hits, all PIM
+    validations:
+      required: true
+
+  - type: input
+    id: volume
+    attributes:
+      label: Expected result volume
+      description: Roughly how many rows this returns over its lookback in a normal tenant.
+      placeholder: e.g. 0-5 per week
+
+  - type: dropdown
+    id: validated
+    attributes:
+      label: Validation
+      options:
+        - Run against real production data
+        - Run against a lab or test tenant only
+        - Syntax-checked only, not run against data
+    validations:
+      required: true
+
+  - type: input
+    id: tags
+    attributes:
+      label: Tags
+      description: Comma separated, for filtering in the app. Max 20.
+      placeholder: e.g. entra-id, privilege-escalation, identity
+
+  - type: textarea
+    id: attribution
+    attributes:
+      label: Source and attribution
+      description: >
+        If this is adapted from published work, link it. Only submit queries you are
+        able to contribute under this repository's licence.

@@ -1,0 +1,175 @@
+# ---------------------------------------------------------------------------
+# Quality gate for KQL Store.
+#
+# Every action is pinned to a full commit SHA rather than a tag. A tag is a mutable
+# pointer: whoever controls the action repository can move v5 to new code, and this
+# workflow has a checkout of the source and a Docker daemon available to it. The
+# comment beside each SHA records which release it is so Dependabot can bump both
+# together — see .github/dependabot.yml.
+#
+# Nothing here publishes an image. The registry (192.168.1.76:5001) is on the
+# maintainer's LAN and is not reachable from GitHub-hosted runners, so `build` proves
+# the Dockerfiles still build and stops there.
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default. No job here needs to write to the repository, and a token
+# that cannot write cannot be turned into a commit by a compromised dependency.
+permissions:
+  contents: read
+
+# A superseded push has nothing useful left to say; cancel it rather than queue it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # better-sqlite3 11.x ships prebuilds for Node 18/20/22 only (see api/package.json);
+  # anything newer falls back to a node-gyp build that fails on the runner.
+  NODE_VERSION: '22'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Static analysis. See eslint.config.cjs for why the rule set is what it is.
+  # -------------------------------------------------------------------------
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The lint toolchain is installed here rather than declared as a root
+      # devDependency because the root package.json belongs to the application build.
+      # Versions are pinned exactly: an ESLint or plugin minor can add rules, and a
+      # gate that changes its own verdict without a commit is not a gate. If the root
+      # package.json ever does carry ESLint, that copy wins and this step is skipped.
+      - name: Install lint toolchain
+        run: |
+          if [ -x node_modules/.bin/eslint ]; then
+            echo "Using the ESLint already resolved by the project."
+          else
+            npm install --no-save --no-package-lock --no-audit --no-fund \
+              eslint@9.39.5 \
+              eslint-plugin-react@7.37.5 \
+              eslint-plugin-react-hooks@7.1.1 \
+              globals@17.7.0
+          fi
+          node_modules/.bin/eslint --version
+
+      - name: Run ESLint
+        run: node_modules/.bin/eslint .
+
+  # -------------------------------------------------------------------------
+  # API unit tests. api/test/ is being added separately, so the run is guarded on
+  # the directory existing — `node --test` on a missing path exits non-zero and
+  # would otherwise red the branch for work that has not landed yet.
+  #
+  # This is a guard rather than continue-on-error on purpose: continue-on-error
+  # would also swallow a genuine test failure once the suite does exist, which is
+  # the exact moment this job needs to be able to fail.
+  # -------------------------------------------------------------------------
+  api-test:
+    name: API tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      # Unconditional: npm ci fails when package.json and package-lock.json have
+      # drifted, which is worth catching on its own. It also proves better-sqlite3
+      # still resolves a prebuild for this Node major rather than trying to compile.
+      - name: Install dependencies
+        run: npm ci
+
+      # The pattern is quoted so Node expands it, not the shell. `node --test test/`
+      # looks like it should work and does not: given a positional path, Node 22
+      # resolves it as a module rather than scanning it, so it fails with
+      # MODULE_NOT_FOUND and reports one failing test regardless of what is in there.
+      # Verified against node:22-bookworm-slim. Letting Node glob also keeps helpers.js
+      # out of the run and picks up nested directories if the suite grows.
+      - name: Run tests
+        run: |
+          if [ ! -d test ]; then
+            echo "::notice title=API tests::api/test/ does not exist yet — nothing to run."
+            exit 0
+          fi
+          node --test "test/**/*.test.js"
+
+  # -------------------------------------------------------------------------
+  # Both images have to build from a clean checkout. This is the only job that
+  # exercises the esbuild/tailwind frontend build and the better-sqlite3 native
+  # install as they actually happen at release time.
+  # -------------------------------------------------------------------------
+  build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build frontend image
+        run: docker build --pull --tag kqlstore:ci .
+
+      - name: Build API image
+        run: docker build --pull --tag kqlstore-api:ci ./api
+
+      # The frontend runs as nginx's unprivileged uid and the API as 1000; both k8s
+      # deployments set runAsNonRoot, which fails the pod at admission — not at
+      # build — if an image reverts to root. Catch it here instead.
+      - name: Assert images do not run as root
+        run: |
+          status=0
+          for image in kqlstore:ci kqlstore-api:ci; do
+            user=$(docker image inspect --format '{{.Config.User}}' "$image")
+            if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+              echo "::error title=Image runs as root::$image has USER '$user'"
+              status=1
+            else
+              echo "$image runs as USER $user"
+            fi
+          done
+          exit $status
+
+  # -------------------------------------------------------------------------
+  # Manifest sanity. See .github/scripts/validate-manifests.mjs for what it checks
+  # and why it is not a full schema validation.
+  # -------------------------------------------------------------------------
+  yaml:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install YAML parser
+        run: npm install --no-save --no-package-lock --no-audit --no-fund yaml@2.9.0
+
+      - name: Validate manifests
+        run: node .github/scripts/validate-manifests.mjs

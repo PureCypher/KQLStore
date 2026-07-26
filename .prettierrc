@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# Prettier configuration, in YAML so it can carry the reasoning.
+#
+# Deliberately NOT wired into CI. Every value below was measured against the code
+# that already exists rather than chosen from taste, so running Prettier should be a
+# near no-op — but "should be" is not "is", and a formatting job that rewrites the
+# whole tree buries the next real diff and destroys `git blame` for a 2,000-line
+# component. Use this to format what you are already editing, not the repo.
+#
+# One known divergence: several object literals in the SPA are hand-aligned into
+# columns (CATEGORY_COLORS and friends). Prettier will collapse that alignment. That
+# is a reason to keep it off those files, not a reason to change these settings.
+# ---------------------------------------------------------------------------
+
+# The existing code terminates statements. Flipping this would touch every line in
+# the repo for no behavioural gain, and ASI has real edge cases around leading ( and [.
+semi: true
+
+# Overwhelmingly single-quoted in api/ and src/ alike.
+singleQuote: true
+
+# ...but JSX attributes stay double-quoted, matching both the existing markup and
+# HTML convention.
+jsxSingleQuote: false
+
+# The 95th-percentile line in api/ sits around 90 characters and in src/ around 110.
+# 100 splits that: it leaves the common long line intact while still breaking the
+# genuinely unreadable ones. Prettier's default of 80 would reflow most of the file.
+printWidth: 100
+
+tabWidth: 2
+useTabs: false
+
+# Matches the existing multi-line literals, and keeps future diffs to one line when
+# an entry is appended.
+trailingComma: all
+
+bracketSpacing: true
+arrowParens: always
+
+# LF regardless of the machine editing it — the nginx and Docker builds are Linux,
+# and a CRLF sneaking into a shell script inside a container fails obscurely.
+endOfLine: lf
+
+overrides:
+  # Prose reflow makes review diffs unreadable; wrap by hand where it reads best.
+  - files: '*.md'
+    options:
+      proseWrap: preserve
+  # Kubernetes manifests and workflows: quote only what YAML actually requires, so
+  # that diffs show real changes rather than quoting churn.
+  - files: ['*.yml', '*.yaml']
+    options:
+      singleQuote: false

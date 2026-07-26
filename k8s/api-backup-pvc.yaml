@@ -1,0 +1,41 @@
+# Dedicated volume for SQLite backups taken by api-backup-cronjob.yaml.
+#
+# WHY A SEPARATE CLAIM, AND WHAT IT DOES NOT PROTECT AGAINST
+#
+# Backups live on their own claim so that deleting, resizing or corrupting the live one
+# does not take the backups with it. That covers the realistic failure modes for this
+# app: an accidental `kubectl delete pvc`, a bad migration, an application-level mistake
+# that mangles rows.
+#
+# It does NOT cover node loss. local-path is node-local storage, and the CronJob is
+# pinned to the API's node (it must be, to mount the RWO data volume — see
+# api-backup-cronjob.yaml), so the provisioner places this volume on that same node.
+# Both copies then share one disk and one machine.
+#
+# That gap is closed by api-backup-offsite-cronjob.yaml, which reads the newest file
+# written here and pushes it to an S3-compatible endpoint half an hour later. This
+# volume is therefore the fast, local restore source — reach for it first, it needs no
+# network and no credentials — and the bucket is the one that survives the hardware.
+# The off-node job ships unconfigured on purpose and fails until an operator fills in
+# k8s/api-backup-offsite-config.yaml; until that is done, this claim is still protection
+# against mistakes only, not against hardware.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kqlstore-api-backup
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Sized against the live store's 1Gi claim: retention is 14 daily copies, but the
+      # dataset is a text query store measured in megabytes and each backup is a compacted
+      # copy (the CronJob takes it out of WAL mode) rather than a full 1Gi. 2Gi is generous
+      # for that. If RETENTION_DAYS or the store grows materially, raise this first — a
+      # full backup volume fails the job with nothing but a non-zero exit to show for it.
+      storage: 2Gi

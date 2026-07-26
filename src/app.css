@@ -1,0 +1,7 @@
+/* Tailwind is compiled at build time by the CLI rather than fetched from
+   cdn.tailwindcss.com at runtime. The CDN build shipped a JIT compiler to every
+   client, required an outbound call on every page load (unusable in an air-gapped
+   SOC, and a usage beacon to a third party), and forced 'unsafe-inline' in any CSP. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

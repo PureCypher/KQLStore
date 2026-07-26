@@ -9,6 +9,17 @@ metadata:
     app.kubernetes.io/name: kqlstore
 spec:
   replicas: 2
+  # Keep a couple of old ReplicaSets for `kubectl rollout undo`, but not the default
+  # ten — every retained revision is a stored pod template nobody ever reads.
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # The frontend is stateless static content, so surging is free. maxUnavailable: 0
+      # keeps both replicas serving throughout a rollout; the replacement must pass its
+      # startupProbe before an old pod is retired.
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: kqlstore
@@ -19,9 +30,30 @@ spec:
         app.kubernetes.io/managed-by: kustomize
         app.kubernetes.io/name: kqlstore
     spec:
+      # nginx serves static files and never calls the Kubernetes API, so a mounted
+      # ServiceAccount token is pure attack surface: it would hand anyone who achieved
+      # RCE in the container a cluster credential for free.
+      automountServiceAccountToken: false
+      # Spread the two replicas across nodes so losing one node cannot take the whole
+      # frontend down.
+      #
+      # whenUnsatisfiable is deliberately ScheduleAnyway rather than DoNotSchedule: this
+      # repo does not fix the cluster's node count, and on a single-node cluster
+      # DoNotSchedule would leave the second replica Pending forever — which, combined
+      # with maxUnavailable: 0 above, would also stall every future rollout. On a
+      # multi-node cluster change this to DoNotSchedule to make the spread a hard
+      # guarantee rather than a scheduler preference.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: kqlstore
       containers:
         - name: kqlstore
           image: 192.168.1.76:5001/kqlstore:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               protocol: TCP
@@ -42,17 +74,27 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
+          # nginx serving static content is ready in well under a second, but a
+          # startupProbe still earns its place: it gates the liveness probe, so a pod
+          # that is slow for any reason (image pull contention, a busy node) cannot be
+          # killed mid-start and fall into a crash loop. It also makes
+          # initialDelaySeconds redundant below — neither liveness nor readiness runs
+          # until startup has succeeded.
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 15
           livenessProbe:
             httpGet:
               path: /
               port: 8080
-            initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
               port: 8080
-            initialDelaySeconds: 3
             periodSeconds: 5
           volumeMounts:
             - name: tmp
@@ -64,3 +106,24 @@ spec:
           emptyDir: {}
         - name: cache
           emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kqlstore
+  namespace: kqlstore
+  labels:
+    app: kqlstore
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kqlstore
+spec:
+  # Voluntary disruptions (node drains, cluster upgrades) may take one replica at a
+  # time but never both. Without this, draining a node that happens to host both pods
+  # evicts them together and the site goes down during routine maintenance.
+  #
+  # minAvailable is 1, not 2: it must stay below replicas or a drain can never make
+  # progress and blocks indefinitely.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: kqlstore

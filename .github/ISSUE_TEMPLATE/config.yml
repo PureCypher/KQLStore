@@ -1,0 +1,5 @@
+# Blank issues stay enabled deliberately. The two forms cover the common cases, but
+# deployment and operational questions ("does this work behind my own reverse proxy",
+# "what happens to the PVC on a node drain") fit neither form, and forcing them into
+# a bug report produces a worse report than a free-text issue would.
+blank_issues_enabled: true

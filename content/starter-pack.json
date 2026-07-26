@@ -1,0 +1,928 @@
+{
+  "schemaVersion": 4,
+  "meta": {
+    "name": "KQL Store starter pack",
+    "generator": "KQL Store",
+    "exportedAt": "2026-07-26T00:00:00.000Z",
+    "totalQueries": 15,
+    "license": "CC0-1.0",
+    "notice": "Starting points, not finished detections. Every entry needs baselining against your own estate before it is enabled as an analytics rule \u2014 read the falsePositives and tuningNotes fields on each. These have not been validated against live data in your tenant."
+  },
+  "queries": [
+    {
+      "id": "7ddf7202-b9a1-4851-9aa3-e7571fd721e6",
+      "name": "Encoded PowerShell command line",
+      "description": "PowerShell launched with an encoded command payload. Behaviour-based: flags the use of the flag rather than any specific payload, so it survives operator retooling.",
+      "query": "let lookback = 7d;\nlet KnownAutomation = dynamic([\"ccmexec.exe\", \"intunemanagementextension.exe\"]);\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| where FileName in~ (\"powershell.exe\", \"pwsh.exe\")\n| where ProcessCommandLine has_any (\"-enc\", \"-EncodedCommand\", \"-e \")\n| where InitiatingProcessFileName !in~ (KnownAutomation)\n| project Timestamp, DeviceName, AccountName, ProcessCommandLine, InitiatingProcessFileName, DeviceId, ReportId\n| order by Timestamp desc",
+      "table": "DeviceProcessEvents",
+      "category": "Hunting",
+      "tags": [
+        "powershell",
+        "lolbin"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "Hunting",
+      "severity": "High",
+      "confidence": "Medium",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "execution",
+          "defense-evasion"
+        ],
+        "techniques": [
+          "T1059.001",
+          "T1027"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Host",
+          "identifier": "HostName",
+          "columnName": "DeviceName"
+        },
+        {
+          "entityType": "Account",
+          "identifier": "Name",
+          "columnName": "AccountName"
+        }
+      ],
+      "falsePositives": [
+        "Configuration-management agents (SCCM, Intune, Ansible) routinely use -EncodedCommand for quoting safety.",
+        "Some vendor installers wrap PowerShell in -enc."
+      ],
+      "tuningNotes": "Run as a hunt for two weeks and baseline InitiatingProcessFileName before promoting to an analytics rule. If volume stays high, add a per-device threshold rather than widening the exclusion list.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1059/001/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "71fa50fd-e082-4d4c-b712-b575e2f16ddf",
+      "name": "LOLBin spawned by an Office application",
+      "description": "An Office application spawning a living-off-the-land binary. A classic macro or exploit execution chain, and rare enough in most estates to alert on directly.",
+      "query": "let lookback = 1d;\nlet OfficeApps = dynamic([\"winword.exe\", \"excel.exe\", \"powerpnt.exe\", \"outlook.exe\", \"msaccess.exe\"]);\nlet LolBins = dynamic([\"rundll32.exe\", \"regsvr32.exe\", \"mshta.exe\", \"wscript.exe\", \"cscript.exe\", \"certutil.exe\", \"bitsadmin.exe\"]);\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| where InitiatingProcessFileName in~ (OfficeApps)\n| where FileName in~ (LolBins)\n| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine, DeviceId, ReportId\n| order by Timestamp desc",
+      "table": "DeviceProcessEvents",
+      "category": "Detection",
+      "tags": [
+        "lolbin",
+        "office",
+        "initial-access"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "High",
+      "confidence": "Medium",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "execution",
+          "defense-evasion"
+        ],
+        "techniques": [
+          "T1218",
+          "T1566.001"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Host",
+          "identifier": "HostName",
+          "columnName": "DeviceName"
+        },
+        {
+          "entityType": "Process",
+          "identifier": "CommandLine",
+          "columnName": "ProcessCommandLine"
+        }
+      ],
+      "falsePositives": [
+        "Some line-of-business Excel add-ins legitimately shell out to rundll32.",
+        "Mail-merge and reporting automation can invoke cscript."
+      ],
+      "tuningNotes": "Baseline by InitiatingProcessCommandLine to find the handful of legitimate document templates, then exclude those specific documents rather than the whole parent process.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1218/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "a791efce-6be2-4a81-be27-7262ec508b79",
+      "name": "Password spray against Entra ID",
+      "description": "One source address failing authentication against many distinct accounts \u2014 the shape of a spray rather than a single-account brute force.",
+      "query": "let lookback = 1d;\nlet FailureThreshold = 20;\nlet UserThreshold = 10;\nSigninLogs\n| where TimeGenerated > ago(lookback)\n| where ResultType != 0\n| summarize\n    FailedAttempts = count(),\n    DistinctUsers = dcount(UserPrincipalName),\n    Users = make_set(UserPrincipalName, 25),\n    FirstSeen = min(TimeGenerated),\n    LastSeen = max(TimeGenerated)\n  by IPAddress, AppDisplayName\n| where FailedAttempts > FailureThreshold and DistinctUsers > UserThreshold\n| order by DistinctUsers desc",
+      "table": "SigninLogs",
+      "category": "Detection",
+      "tags": [
+        "identity",
+        "brute-force"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "High",
+      "confidence": "High",
+      "platform": [
+        "Identity",
+        "Azure"
+      ],
+      "attack": {
+        "tactics": [
+          "credential-access"
+        ],
+        "techniques": [
+          "T1110.003"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "AzureActiveDirectory"
+        ],
+        "tables": [
+          "SigninLogs"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "IP",
+          "identifier": "Address",
+          "columnName": "IPAddress"
+        }
+      ],
+      "falsePositives": [
+        "Corporate NAT egress concentrates many users behind one address; a stale password after a rotation then looks like a spray.",
+        "Misconfigured mail clients retry continuously with an old credential."
+      ],
+      "tuningNotes": "Tune UserThreshold to your largest NAT egress population. Consider excluding your own egress ranges and alerting on them separately with a much higher threshold.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1110/003/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "8c20bbe2-8db9-446e-9b28-430fc98cef1e",
+      "name": "Successful sign-in from an IP that just sprayed",
+      "description": "A successful authentication from an address that also failed against many accounts in the same window. Far higher fidelity than the spray alert alone, because it indicates the spray worked.",
+      "query": "let lookback = 1d;\nlet SprayIPs =\n    SigninLogs\n    | where TimeGenerated > ago(lookback)\n    | where ResultType != 0\n    | summarize DistinctUsers = dcount(UserPrincipalName) by IPAddress\n    | where DistinctUsers > 10\n    | project IPAddress;\nSigninLogs\n| where TimeGenerated > ago(lookback)\n| where ResultType == 0\n| where IPAddress in (SprayIPs)\n| project TimeGenerated, UserPrincipalName, IPAddress, AppDisplayName, Location, UserAgent\n| order by TimeGenerated desc",
+      "table": "SigninLogs",
+      "category": "Detection",
+      "tags": [
+        "identity",
+        "brute-force",
+        "high-fidelity"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "Critical",
+      "confidence": "High",
+      "platform": [
+        "Identity",
+        "Azure"
+      ],
+      "attack": {
+        "tactics": [
+          "credential-access",
+          "initial-access"
+        ],
+        "techniques": [
+          "T1110.003"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "AzureActiveDirectory"
+        ],
+        "tables": [
+          "SigninLogs"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "UserPrincipalName"
+        },
+        {
+          "entityType": "IP",
+          "identifier": "Address",
+          "columnName": "IPAddress"
+        }
+      ],
+      "falsePositives": [
+        "Shared corporate egress: legitimate users succeed from the same NAT address that produced the failures."
+      ],
+      "tuningNotes": "This is the escalation of the spray hunt. If your estate NATs heavily, correlate on IP plus user agent, or restrict to addresses outside your published egress ranges.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1110/003/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "79ce3832-9380-4e10-8df0-883a528ea38f",
+      "name": "New device registered to a privileged account",
+      "description": "Device or MFA-method registration events. An attacker who has obtained a credential commonly registers their own authenticator to establish durable access.",
+      "query": "let lookback = 7d;\nAuditLogs\n| where TimeGenerated > ago(lookback)\n| where OperationName has_any (\"Add registered device\", \"Register device\", \"Add security info\")\n| where Result =~ \"success\"\n| extend Actor = tostring(InitiatedBy.user.userPrincipalName)\n| where isnotempty(Actor)\n| project TimeGenerated, OperationName, Actor, TargetResources, Result\n| order by TimeGenerated desc",
+      "table": "AuditLogs",
+      "category": "Detection",
+      "tags": [
+        "identity",
+        "persistence",
+        "mfa"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "High",
+      "confidence": "Medium",
+      "platform": [
+        "Identity",
+        "Azure"
+      ],
+      "attack": {
+        "tactics": [
+          "persistence"
+        ],
+        "techniques": [
+          "T1098.005"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "AzureActiveDirectory"
+        ],
+        "tables": [
+          "AuditLogs"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "Actor"
+        }
+      ],
+      "falsePositives": [
+        "Ordinary onboarding and phone replacement generate this constantly.",
+        "Bulk device enrolment during a rollout will flood it."
+      ],
+      "tuningNotes": "On its own this is far too noisy for an alert. Join it against your privileged-role membership, or against accounts that have signed in from a new country in the same window, before enabling.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1098/005/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "709f0ea8-6ca5-4c51-9e81-3ce8cba572b2",
+      "name": "Suspicious inbox rule forwarding externally",
+      "description": "Creation of a mailbox rule that forwards or redirects mail. A standard business email compromise persistence and collection step.",
+      "query": "let lookback = 7d;\nOfficeActivity\n| where TimeGenerated > ago(lookback)\n| where Operation in~ (\"New-InboxRule\", \"Set-InboxRule\")\n| extend RuleParams = tostring(Parameters)\n| where RuleParams has_any (\"ForwardTo\", \"ForwardAsAttachmentTo\", \"RedirectTo\")\n| project TimeGenerated, UserId, ClientIP, Operation, RuleParams\n| order by TimeGenerated desc",
+      "table": "OfficeActivity",
+      "category": "Detection",
+      "tags": [
+        "bec",
+        "email",
+        "exfiltration"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "High",
+      "confidence": "High",
+      "platform": [
+        "Office365"
+      ],
+      "attack": {
+        "tactics": [
+          "collection",
+          "exfiltration"
+        ],
+        "techniques": [
+          "T1114.003"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "Office365"
+        ],
+        "tables": [
+          "OfficeActivity"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "UserId"
+        },
+        {
+          "entityType": "IP",
+          "identifier": "Address",
+          "columnName": "ClientIP"
+        }
+      ],
+      "falsePositives": [
+        "Users legitimately forward to a personal or delegate address, particularly before leave.",
+        "Some ticketing integrations create forwarding rules."
+      ],
+      "tuningNotes": "Highest fidelity when restricted to rules whose target domain is outside your tenant. Extract the target address from Parameters and compare it against your accepted domains.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1114/003/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "8e364688-2180-4870-a85f-b76db396b303",
+      "name": "Mail flagged malicious after delivery",
+      "description": "Messages reclassified as phish or malware after they were already delivered. The starting point for a post-delivery containment investigation: who received it and did it reach the inbox.",
+      "query": "let lookback = 7d;\nEmailPostDeliveryEvents\n| where Timestamp > ago(lookback)\n| where ActionType has \"Phish\" or ActionType has \"Malware\"\n| join kind=inner (\n    EmailEvents\n    | where Timestamp > ago(lookback)\n    | project NetworkMessageId, SenderFromAddress, RecipientEmailAddress, Subject, DeliveryLocation\n  ) on NetworkMessageId\n| project Timestamp, ActionType, SenderFromAddress, RecipientEmailAddress, Subject, DeliveryLocation, NetworkMessageId\n| order by Timestamp desc",
+      "table": "EmailPostDeliveryEvents",
+      "category": "Investigation",
+      "tags": [
+        "email",
+        "phishing",
+        "triage"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "Investigation",
+      "severity": "Medium",
+      "confidence": "High",
+      "platform": [
+        "Office365"
+      ],
+      "attack": {
+        "tactics": [
+          "initial-access"
+        ],
+        "techniques": [
+          "T1566"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "EmailPostDeliveryEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "RecipientEmailAddress"
+        }
+      ],
+      "falsePositives": [
+        "Zero-hour auto purge often removes the message before a user interacts with it, so many hits need no action."
+      ],
+      "tuningNotes": "Pair with UrlClickEvents on the same NetworkMessageId to establish whether anyone actually clicked. Not an alerting query \u2014 this is an investigation pivot.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1566/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "a595eb7c-4dc6-4ba7-bddb-2c57dcd9518a",
+      "name": "User clicked a URL in a malicious message",
+      "description": "A user followed a link that Safe Links classified as a threat, including cases where they clicked through the warning page.",
+      "query": "let lookback = 7d;\nUrlClickEvents\n| where Timestamp > ago(lookback)\n| where ActionType == \"ClickAllowed\" or IsClickedThrough != \"0\"\n| where ThreatTypes has_any (\"Phish\", \"Malware\")\n| project Timestamp, AccountUpn, Url, ThreatTypes, ActionType, IsClickedThrough, NetworkMessageId\n| order by Timestamp desc",
+      "table": "UrlClickEvents",
+      "category": "Detection",
+      "tags": [
+        "email",
+        "phishing",
+        "high-fidelity"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "Critical",
+      "confidence": "High",
+      "platform": [
+        "Office365"
+      ],
+      "attack": {
+        "tactics": [
+          "initial-access"
+        ],
+        "techniques": [
+          "T1566.002"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "UrlClickEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "AccountUpn"
+        },
+        {
+          "entityType": "URL",
+          "identifier": "Url",
+          "columnName": "Url"
+        }
+      ],
+      "falsePositives": [
+        "Security awareness training platforms generate simulated clicks that can appear here."
+      ],
+      "tuningNotes": "Exclude your phishing-simulation sending infrastructure by NetworkMessageId or sender domain, or the alert will fire on every training campaign.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1566/002/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "f71e1500-fbdf-478e-a676-f1fcd0b36fa0",
+      "name": "Rare parent-child process relationship",
+      "description": "Parent-child process pairs that are rare relative to a two-week baseline. A stacking hunt rather than a rule \u2014 the output is a list to triage, not an alert.",
+      "query": "let lookback = 7d;\nlet baseline = 14d;\nlet Common =\n    DeviceProcessEvents\n    | where Timestamp between (ago(baseline) .. ago(lookback))\n    | summarize BaselineCount = count() by InitiatingProcessFileName, FileName\n    | where BaselineCount > 50\n    | project InitiatingProcessFileName, FileName;\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| join kind=leftanti Common on InitiatingProcessFileName, FileName\n| summarize Seen = count(), Devices = dcount(DeviceName), Sample = any(ProcessCommandLine)\n  by InitiatingProcessFileName, FileName\n| where Devices <= 3\n| order by Seen asc",
+      "table": "DeviceProcessEvents",
+      "category": "Hunting",
+      "tags": [
+        "hunting",
+        "stacking"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "Hunting",
+      "severity": "Medium",
+      "confidence": "Low",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "execution",
+          "defense-evasion"
+        ],
+        "techniques": [
+          "T1055"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [],
+      "falsePositives": [
+        "New software rollouts produce many genuinely new pairs.",
+        "Rarely used administrative tooling will always surface here."
+      ],
+      "tuningNotes": "Do not convert this to an analytics rule. Run it weekly, triage the top of the list, and add confirmed-benign pairs to a watchlist you exclude.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1055/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "874dda54-1b88-4bf6-bb01-18b11cc9f427",
+      "name": "Outbound connection to a newly observed domain",
+      "description": "Successful outbound connections to hosts not seen in the previous 30 days, narrowed to those touched by very few devices. Newly-registered infrastructure is a strong C2 signal.",
+      "query": "let lookback = 1d;\nlet baseline = 30d;\nlet Known =\n    DeviceNetworkEvents\n    | where Timestamp between (ago(baseline) .. ago(lookback))\n    | where isnotempty(RemoteUrl)\n    | summarize by RemoteUrl;\nDeviceNetworkEvents\n| where Timestamp > ago(lookback)\n| where ActionType == \"ConnectionSuccess\"\n| where isnotempty(RemoteUrl)\n| join kind=leftanti Known on RemoteUrl\n| summarize Connections = count(), Devices = dcount(DeviceName), Processes = make_set(InitiatingProcessFileName, 10)\n  by RemoteUrl\n| where Devices <= 2\n| order by Connections desc",
+      "table": "DeviceNetworkEvents",
+      "category": "Hunting",
+      "tags": [
+        "hunting",
+        "c2",
+        "network"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "Hunting",
+      "severity": "Medium",
+      "confidence": "Low",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "command-and-control"
+        ],
+        "techniques": [
+          "T1071.001"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceNetworkEvents"
+        ]
+      },
+      "entityMappings": [],
+      "falsePositives": [
+        "CDN and telemetry endpoints rotate hostnames constantly and will dominate the output.",
+        "Any newly installed software contacts new domains legitimately."
+      ],
+      "tuningNotes": "Expect a long tail of CDN noise; build an exclusion list of your CDN and vendor telemetry suffixes before this becomes usable. Never alert on this directly.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1071/001/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "14509cdc-38dd-40af-9fe7-ce682ee86db6",
+      "name": "Scheduled task created by an unusual process",
+      "description": "Scheduled task creation via schtasks.exe from a parent that is not part of the normal software-management chain.",
+      "query": "let lookback = 1d;\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| where FileName =~ \"schtasks.exe\"\n| where ProcessCommandLine has \"/create\"\n| where InitiatingProcessFileName !in~ (\"ccmexec.exe\", \"msiexec.exe\", \"services.exe\", \"svchost.exe\")\n| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, ProcessCommandLine, DeviceId, ReportId\n| order by Timestamp desc",
+      "table": "DeviceProcessEvents",
+      "category": "Detection",
+      "tags": [
+        "persistence",
+        "windows"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "Medium",
+      "confidence": "Medium",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "persistence",
+          "execution"
+        ],
+        "techniques": [
+          "T1053.005"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Host",
+          "identifier": "HostName",
+          "columnName": "DeviceName"
+        }
+      ],
+      "falsePositives": [
+        "Installers and update agents create tasks routinely.",
+        "Administrative scripts run interactively by IT staff."
+      ],
+      "tuningNotes": "Baseline InitiatingProcessFileName for a fortnight and extend the exclusion list to your own management stack. Consider also matching on task names written to unusual paths.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1053/005/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "09ae177c-ab64-4a34-8071-ea0050343f1e",
+      "name": "Volume shadow copy deletion",
+      "description": "Deletion of volume shadow copies or the backup catalogue \u2014 near-universal ransomware pre-encryption behaviour and very rarely legitimate.",
+      "query": "let lookback = 1d;\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| where (FileName =~ \"vssadmin.exe\" and ProcessCommandLine has_all (\"delete\", \"shadows\"))\n     or (FileName =~ \"wmic.exe\" and ProcessCommandLine has_all (\"shadowcopy\", \"delete\"))\n     or (FileName =~ \"wbadmin.exe\" and ProcessCommandLine has_all (\"delete\", \"catalog\"))\n| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine, InitiatingProcessFileName, DeviceId, ReportId\n| order by Timestamp desc",
+      "table": "DeviceProcessEvents",
+      "category": "Detection",
+      "tags": [
+        "ransomware",
+        "impact",
+        "high-fidelity"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "Critical",
+      "confidence": "High",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "impact"
+        ],
+        "techniques": [
+          "T1490"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Host",
+          "identifier": "HostName",
+          "columnName": "DeviceName"
+        },
+        {
+          "entityType": "Account",
+          "identifier": "Name",
+          "columnName": "AccountName"
+        }
+      ],
+      "falsePositives": [
+        "Some backup products prune shadow copies as part of routine maintenance."
+      ],
+      "tuningNotes": "One of the few detections that justifies alerting with no baselining. If a backup product triggers it, exclude that specific product binary rather than raising the threshold.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1490/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "94b5373e-7b54-40e6-803c-452684448d76",
+      "name": "Credential dumping tool signatures on the command line",
+      "description": "Command lines carrying well-known LSASS credential-dumping signatures, including the comsvcs.dll MiniDump technique that needs no dropped binary.",
+      "query": "let lookback = 1d;\nDeviceProcessEvents\n| where Timestamp > ago(lookback)\n| where ProcessCommandLine has_any (\"sekurlsa\", \"lsadump\", \"minidump\", \"comsvcs.dll, MiniDump\", \"procdump\")\n     or (FileName =~ \"rundll32.exe\" and ProcessCommandLine has \"comsvcs\" and ProcessCommandLine has \"MiniDump\")\n| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine, InitiatingProcessFileName, DeviceId, ReportId\n| order by Timestamp desc",
+      "table": "DeviceProcessEvents",
+      "category": "Detection",
+      "tags": [
+        "credential-access",
+        "lsass"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "Critical",
+      "confidence": "Medium",
+      "platform": [
+        "Windows"
+      ],
+      "attack": {
+        "tactics": [
+          "credential-access"
+        ],
+        "techniques": [
+          "T1003.001"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "MicrosoftThreatProtection"
+        ],
+        "tables": [
+          "DeviceProcessEvents"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Host",
+          "identifier": "HostName",
+          "columnName": "DeviceName"
+        },
+        {
+          "entityType": "Account",
+          "identifier": "Name",
+          "columnName": "AccountName"
+        }
+      ],
+      "falsePositives": [
+        "Incident-response and forensics tooling legitimately uses procdump against LSASS.",
+        "Some crash-reporting agents call MiniDump."
+      ],
+      "tuningNotes": "String-based and therefore evadable \u2014 treat as one signal among several rather than complete coverage. Pair with DeviceEvents where ActionType is a process-access event targeting lsass.exe for a behavioural view.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1003/001/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "f2cfd8f0-2747-4141-a88f-53b800728243",
+      "name": "Azure role assignment granting privileged access",
+      "description": "Successful role assignment writes in Azure Resource Manager. Privilege grants are infrequent enough in most subscriptions to review individually.",
+      "query": "let lookback = 7d;\nAzureActivity\n| where TimeGenerated > ago(lookback)\n| where OperationNameValue =~ \"Microsoft.Authorization/roleAssignments/write\"\n| where ActivityStatusValue =~ \"Success\"\n| project TimeGenerated, Caller, CallerIpAddress, ResourceGroup, _ResourceId, OperationNameValue\n| order by TimeGenerated desc",
+      "table": "AzureActivity",
+      "category": "Detection",
+      "tags": [
+        "azure",
+        "privilege-escalation"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "AnalyticsRule",
+      "severity": "High",
+      "confidence": "Medium",
+      "platform": [
+        "Azure"
+      ],
+      "attack": {
+        "tactics": [
+          "privilege-escalation",
+          "persistence"
+        ],
+        "techniques": [
+          "T1098"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "AzureActivity"
+        ],
+        "tables": [
+          "AzureActivity"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "Caller"
+        },
+        {
+          "entityType": "IP",
+          "identifier": "Address",
+          "columnName": "CallerIpAddress"
+        }
+      ],
+      "falsePositives": [
+        "Infrastructure-as-code pipelines assign roles on every deployment.",
+        "Landing-zone automation creates assignments in bulk."
+      ],
+      "tuningNotes": "Exclude your deployment service principals by Caller, then review what is left. If pipelines dominate, scope the rule to assignments made by human identities only.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1098/"
+      ],
+      "lookback": "7d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    },
+    {
+      "id": "d14a9d5b-4614-442d-969f-5f58bc82596f",
+      "name": "Impossible travel between successful sign-ins",
+      "description": "Successful sign-ins from more than one country within four hours. A coarse proxy for impossible travel using only country granularity.",
+      "query": "let lookback = 1d;\nSigninLogs\n| where TimeGenerated > ago(lookback)\n| where ResultType == 0\n| extend Country = tostring(LocationDetails.countryOrRegion)\n| where isnotempty(Country)\n| summarize Countries = make_set(Country), Signins = count(), First = min(TimeGenerated), Last = max(TimeGenerated)\n  by UserPrincipalName\n| where array_length(Countries) > 1\n| extend WindowMinutes = datetime_diff(\"minute\", Last, First)\n| where WindowMinutes < 240\n| order by WindowMinutes asc",
+      "table": "SigninLogs",
+      "category": "Hunting",
+      "tags": [
+        "identity",
+        "hunting"
+      ],
+      "favorite": false,
+      "usageCount": 0,
+      "queryType": "Hunting",
+      "severity": "Medium",
+      "confidence": "Low",
+      "platform": [
+        "Identity",
+        "Azure"
+      ],
+      "attack": {
+        "tactics": [
+          "initial-access"
+        ],
+        "techniques": [
+          "T1078.004"
+        ]
+      },
+      "dataSources": {
+        "connectors": [
+          "AzureActiveDirectory"
+        ],
+        "tables": [
+          "SigninLogs"
+        ]
+      },
+      "entityMappings": [
+        {
+          "entityType": "Account",
+          "identifier": "FullName",
+          "columnName": "UserPrincipalName"
+        }
+      ],
+      "falsePositives": [
+        "VPN and cloud egress routinely place a user in another country.",
+        "Mobile roaming near a border produces country flapping."
+      ],
+      "tuningNotes": "Entra ID Protection does this properly with travel-time modelling \u2014 prefer that signal if you have the licence. This exists for estates that do not, and needs a VPN egress exclusion list to be usable.",
+      "references": [
+        "https://attack.mitre.org/techniques/T1078/004/"
+      ],
+      "lookback": "1d",
+      "version": "1.0.0",
+      "lastValidated": "2026-07-26",
+      "author": "KQL Store starter pack",
+      "license": "CC0-1.0",
+      "created": "2026-07-26T00:00:00.000Z",
+      "updated": "2026-07-26T00:00:00.000Z"
+    }
+  ]
+}

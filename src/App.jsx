@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { Search, Plus, Upload, Filter, X, Keyboard, Terminal, Database, AlertTriangle } from 'lucide-react';
 import { CATEGORIES, BACKUP_KEY, CURRENT_SCHEMA_VERSION } from './constants.js';
 import { generateId } from './lib/id.js';
@@ -13,6 +13,7 @@ import { useDebounce } from './hooks/useDebounce.js';
 import { ToastContext } from './context/toast.js';
 import { StorageInspector } from './components/StorageInspector.jsx';
 import { ExportMenu } from './components/ExportMenu.jsx';
+import { Modal } from './components/Modal.jsx';
 import { AppContext } from './context/app.js';
 import { ToastContainer } from './components/ToastContainer.jsx';
 import { KeyboardHelp } from './components/KeyboardHelp.jsx';
@@ -52,6 +53,7 @@ export default function App() {
   const [showInspector, setShowInspector] = useState(false);
   const [importPreview, setImportPreview] = useState(null); // {text, preview} for import preview modal
   const [toasts, setToasts] = useState([]);
+  const mobileSidebarTitleId = useId();
   const searchRef = useRef(null);
   const fileInputRef = useRef(null);
   const toastIdRef = useRef(0);
@@ -446,17 +448,30 @@ export default function App() {
       <div className="flex h-screen font-mono overflow-hidden" style={{ background: '#0a0a0f', color: '#e0e0e0' }}>
         <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
 
-        {/* Mobile sidebar overlay */}
+        {/* Mobile sidebar. It behaves as a modal overlay — it covers the page and the
+            content behind it is unreachable — so it needs the same dialog semantics as the
+            other overlays: a focus trap, Escape to close, and focus returned to the button
+            that opened it. It was previously a bare div, so a keyboard or screen-reader
+            user could tab straight through it into the cards underneath. */}
         {showMobileSidebar && (
-          <div className="fixed inset-0 z-50 lg:hidden flex">
-            <div className="absolute inset-0 bg-black/60" onClick={() => setShowMobileSidebar(false)} />
-            <div className="relative w-72 h-full shadow-2xl" style={{ background: '#0d0d14' }}>
-              <button onClick={() => setShowMobileSidebar(false)} aria-label="Close filters" title="Close filters" className="absolute top-3 right-3 p-1 rounded hover:bg-white/10 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
-                <X size={16} className="text-gray-400" />
-              </button>
-              <SidebarContent />
-            </div>
-          </div>
+          <Modal
+            labelledBy={mobileSidebarTitleId}
+            onClose={() => setShowMobileSidebar(false)}
+            backdropClassName="lg:hidden"
+            className="relative w-72 h-full shadow-2xl"
+            style={{ background: '#0d0d14' }}
+          >
+            <h2 id={mobileSidebarTitleId} className="sr-only">Filters and sorting</h2>
+            <button
+              onClick={() => setShowMobileSidebar(false)}
+              aria-label="Close filters"
+              title="Close filters"
+              className="absolute top-3 right-3 p-1 rounded hover:bg-white/10 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+            >
+              <X size={16} className="text-gray-400" />
+            </button>
+            <SidebarContent />
+          </Modal>
         )}
 
         {/* Desktop sidebar */}

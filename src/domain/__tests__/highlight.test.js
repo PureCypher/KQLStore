@@ -173,4 +173,76 @@ describe('highlightKQL', () => {
     expect(out).toContain('<span style="color:#c678dd">where</span>');
     expect(out).toContain('<span style="color:#61afef">ago</span>');
   });
+
+  // Coverage gaps found by reading real Sentinel content: every one of these is common in
+  // a published detection and every one of them used to render as plain text.
+  describe('language coverage', () => {
+    const KEYWORD = '#c678dd';
+    const FUNCTION = '#61afef';
+
+    it.each([
+      ['!contains', '| where CommandLine !contains "svchost"'],
+      ['!startswith', '| where FolderPath !startswith "C:\\\\Windows"'],
+      ['!endswith', '| where FileName !endswith ".dll"'],
+      ['!between', '| where Port !between (1 .. 1024)'],
+      ['!has', '| where Account !has "admin"'],
+      ['!in', '| where Type !in ("a", "b")'],
+      ['!has_any', '| where Cmd !has_any ("a", "b")'],
+    ])('styles the negated operator %s as one token', (op, query) => {
+      expect(highlightKQL(query)).toContain(`<span style="color:${KEYWORD}">${op}</span>`);
+    });
+
+    // The defect this guards against is subtle: the un-negated keyword matches the tail and
+    // leaves the ! outside the span, so the predicate reads as its own opposite.
+    it('never leaves a bare ! outside the operator span', () => {
+      const out = highlightKQL('| where CommandLine !contains "x"');
+      expect(out).not.toContain(`!<span style="color:${KEYWORD}">contains</span>`);
+    });
+
+    it.each([
+      'project-away', 'project-keep', 'project-rename', 'project-reorder',
+    ])('styles %s as one token rather than project + text', (op) => {
+      const out = highlightKQL(`SigninLogs\n| ${op} UserAgent`);
+      expect(out).toContain(`<span style="color:${KEYWORD}">${op}</span>`);
+      expect(out).not.toContain(`<span style="color:${KEYWORD}">project</span>-`);
+    });
+
+    it.each(['externaldata', 'partition', 'scan', 'consume', 'facet', 'sample', 'hasprefix'])(
+      'styles the operator %s', (kw) => {
+        expect(highlightKQL(`| ${kw} X`)).toContain(`<span style="color:${KEYWORD}">${kw}</span>`);
+      });
+
+    it.each([
+      'iif', 'series_decompose', 'series_decompose_anomalies', 'ipv4_is_match',
+      'ipv4_is_private', 'ipv6_is_match', 'parse_ipv4', 'geo_info_from_ip_address',
+      'has_any_index', 'array_index_of', 'set_difference', 'set_intersect', 'set_union',
+      'bin_at', 'startofday', 'endofday', 'startofweek', 'startofmonth', 'todynamic',
+      'materialized_view', 'tolower', 'toupper',
+    ])('styles the function %s', (fn) => {
+      expect(highlightKQL(`| extend X = ${fn}(Y)`)).toContain(`<span style="color:${FUNCTION}">${fn}</span>`);
+    });
+
+    // series_decompose is a prefix of series_decompose_anomalies, and set_union of nothing —
+    // but bin_at, has_any_index and set_* all extend a shorter keyword, so a greedy shorter
+    // match would style half the identifier and leave the rest bare.
+    it.each(['series_decompose_anomalies', 'has_any_index', 'bin_at', 'set_union'])(
+      'does not split %s at a shorter keyword', (fn) => {
+        const out = highlightKQL(`| extend X = ${fn}(Y)`);
+        expect(hasNestedSpan(out)).toBe(false);
+        expect(strip(out)).toBe(`| extend X = ${fn}(Y)`);
+      });
+
+    it('still round-trips and never nests spans over the new tokens', () => {
+      const frag = ['| project-away X', ' !contains ', '"s"', '\n', '| scan ', 'iif(A,1,2)',
+        ' !in~ ', 'partition by Y', 'series_decompose_anomalies(Z)', '// c ', ' !has_any '];
+      for (let i = 0; i < 200; i++) {
+        let s = '';
+        const n = 1 + (i % 4);
+        for (let j = 0; j < n; j++) s += frag[(i * 3 + j * 5) % frag.length];
+        const out = highlightKQL(s);
+        expect(hasNestedSpan(out), `nested span for ${JSON.stringify(s)}`).toBe(false);
+        expect(strip(out), `round-trip for ${JSON.stringify(s)}`).toBe(s);
+      }
+    });
+  });
 });

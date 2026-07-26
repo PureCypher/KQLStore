@@ -1,5 +1,6 @@
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { FOCUS_RING } from './a11y.jsx';
 
 const QueryDescription = React.memo(({ description, maxCollapsedLines = 3, className }) => {
   const [expanded, setExpanded] = useState(false);
@@ -139,16 +140,19 @@ const QueryDescription = React.memo(({ description, maxCollapsedLines = 3, class
       }),
     ),
 
-    // Expand/collapse toggle
+    // Expand/collapse toggle. The inline style below clears the user-agent button border
+    // and background, which takes the default focus ring with it, so the shared indicator
+    // has to be put back explicitly.
     needsTruncation && React.createElement('button', {
       onClick: () => setExpanded(prev => !prev),
       'aria-expanded': expanded,
-      className: 'flex items-center gap-1 text-xs mt-1 hover:underline',
+      'aria-label': expanded ? 'Show less of this description' : 'Show the full description',
+      className: `flex items-center gap-1 text-xs mt-1 hover:underline rounded ${FOCUS_RING}`,
       style: { color: '#00d4ff', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' },
     },
       expanded
-        ? React.createElement(React.Fragment, null, React.createElement(ChevronUp, { size: 12 }), 'Show less')
-        : React.createElement(React.Fragment, null, React.createElement(ChevronDown, { size: 12 }), 'Show more'),
+        ? React.createElement(React.Fragment, null, React.createElement(ChevronUp, { size: 12, 'aria-hidden': 'true' }), 'Show less')
+        : React.createElement(React.Fragment, null, React.createElement(ChevronDown, { size: 12, 'aria-hidden': 'true' }), 'Show more'),
     ),
   );
 });

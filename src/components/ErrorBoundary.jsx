@@ -1,4 +1,5 @@
 import React from 'react';
+import { FOCUS_RING } from './a11y.jsx';
 
 /**
  * Without a boundary, one malformed stored record turns a render-time throw into a blank
@@ -68,7 +69,9 @@ class ErrorBoundary extends React.Component {
         alignItems: 'center', justifyContent: 'center', padding: 24,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       }}>
-        <div style={{
+        {/* role=alert so the failure is announced: this replaces the entire app, and
+            without it a screen reader user is left on a page that simply stopped. */}
+        <div role="alert" style={{
           maxWidth: 640, background: '#12121a', border: '1px solid #ff4444',
           borderRadius: 12, padding: 28,
         }}>
@@ -82,11 +85,11 @@ class ErrorBoundary extends React.Component {
             fontSize: 12, color: '#ff6b6b', overflowX: 'auto', margin: '0 0 18px',
           }}>{String(this.state.error?.message || this.state.error)}</pre>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button style={btn} onClick={this.handleExport}>Export local cache</button>
-            <button style={{ ...btn, borderColor: '#ff4444', color: '#ff6b6b' }} onClick={this.handlePurge}>
+            <button className={FOCUS_RING} style={btn} onClick={this.handleExport}>Export local cache</button>
+            <button className={FOCUS_RING} style={{ ...btn, borderColor: '#ff4444', color: '#ff6b6b' }} onClick={this.handlePurge}>
               Purge cache and reload
             </button>
-            <button style={btn} onClick={() => window.location.reload()}>Reload</button>
+            <button className={FOCUS_RING} style={btn} onClick={() => window.location.reload()}>Reload</button>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Search, Plus, Download, Upload, Filter, X, Keyboard, Terminal, Database, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Upload, Filter, X, Keyboard, Terminal, Database, AlertTriangle } from 'lucide-react';
 import { CATEGORIES, BACKUP_KEY, CURRENT_SCHEMA_VERSION } from './constants.js';
 import { generateId } from './lib/id.js';
 import { getTableDisplayName } from './domain/tables.js';
@@ -12,6 +12,7 @@ import { useKQLStorage } from './storage/useKQLStorage.js';
 import { useDebounce } from './hooks/useDebounce.js';
 import { ToastContext } from './context/toast.js';
 import { StorageInspector } from './components/StorageInspector.jsx';
+import { ExportMenu } from './components/ExportMenu.jsx';
 import { AppContext } from './context/app.js';
 import { ToastContainer } from './components/ToastContainer.jsx';
 import { KeyboardHelp } from './components/KeyboardHelp.jsx';
@@ -450,7 +451,7 @@ export default function App() {
           <div className="fixed inset-0 z-50 lg:hidden flex">
             <div className="absolute inset-0 bg-black/60" onClick={() => setShowMobileSidebar(false)} />
             <div className="relative w-72 h-full shadow-2xl" style={{ background: '#0d0d14' }}>
-              <button onClick={() => setShowMobileSidebar(false)} className="absolute top-3 right-3 p-1 rounded hover:bg-white/10 z-10">
+              <button onClick={() => setShowMobileSidebar(false)} aria-label="Close filters" title="Close filters" className="absolute top-3 right-3 p-1 rounded hover:bg-white/10 z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
                 <X size={16} className="text-gray-400" />
               </button>
               <SidebarContent />
@@ -468,7 +469,7 @@ export default function App() {
           {/* Header */}
           <header className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: '1px solid #1e1e2e', background: '#0d0d14' }}>
             <div className="flex items-center gap-3">
-              <button onClick={() => setShowMobileSidebar(true)} className="lg:hidden p-1.5 rounded-md hover:bg-white/5">
+              <button onClick={() => setShowMobileSidebar(true)} aria-label="Open filters" title="Filters" className="lg:hidden p-1.5 rounded-md hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
                 <Filter size={16} className="text-gray-400" />
               </button>
               <h1 className="text-lg font-bold tracking-tight">
@@ -480,13 +481,11 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button onClick={() => setEditingQuery({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
                 style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} /><span className="hidden sm:inline">New Query</span></button>
-              <button onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5"
+              <button onClick={() => fileInputRef.current?.click()} aria-label="Import queries from a JSON file"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
                 style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Upload size={14} /><span className="hidden sm:inline">Import</span></button>
-              <button onClick={() => handleExport()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5"
-                style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Download size={14} /><span className="hidden sm:inline">Export</span></button>
-              <button onClick={() => setShowKeyboardHelp(true)} className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block" title="Keyboard shortcuts (?)">
+              <ExportMenu queries={filteredQueries} onToast={addToast} />
+              <button onClick={() => setShowKeyboardHelp(true)} aria-label="Keyboard shortcuts" className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Keyboard shortcuts (?)">
                 <Keyboard size={14} className="text-gray-500" />
               </button>
             </div>
@@ -539,7 +538,7 @@ export default function App() {
 
           {/* Status bar */}
           <footer className="hidden sm:flex items-center justify-between px-4 py-1.5 text-xs font-mono shrink-0"
-            style={{ borderTop: '1px solid #1e1e2e', background: '#0d0d14', color: '#555' }}>
+            style={{ borderTop: '1px solid #1e1e2e', background: '#0d0d14', color: '#9ca3af' }}>
             <div className="flex items-center gap-4">
               <span>{filteredQueries.length} / {queries.length} queries</span>
               {hasActiveFilters && <span style={{ color: '#00d4ff' }}>filtered</span>}
@@ -547,7 +546,7 @@ export default function App() {
             <div className="flex items-center gap-4">
               <SavingIndicator />
               {lastSavedTimestamp && <span>synced {new Date(lastSavedTimestamp).toLocaleTimeString()}</span>}
-              <button onClick={() => setShowInspector((p) => !p)} className="hover:text-gray-300 flex items-center gap-1" title="Storage Inspector (Ctrl+Shift+D)">
+              <button onClick={() => setShowInspector((p) => !p)} aria-label="Storage inspector" className="hover:text-gray-300 flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Storage Inspector (Ctrl+Shift+D)">
                 <Database size={10} />
                 <span>v{CURRENT_SCHEMA_VERSION}</span>
               </button>

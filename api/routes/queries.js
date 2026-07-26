@@ -173,8 +173,8 @@ router.post('/import', (req, res, next) => {
 
     const selectStored = db.prepare('SELECT updated, created, usage_count FROM queries WHERE id = ?');
     const insert = db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, created, updated)
-      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @created, @updated)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, created, updated)
+      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @metadata, @created, @updated)
     `);
     const update = db.prepare(`
       UPDATE queries
@@ -186,6 +186,7 @@ router.post('/import', (req, res, next) => {
           tags        = @tags,
           favorite    = @favorite,
           usage_count = @usage_count,
+          metadata    = @metadata,
           updated     = @updated
       WHERE id = @id
     `);
@@ -205,6 +206,7 @@ router.post('/import', (req, res, next) => {
           tags: JSON.stringify(item.tags || []),
           favorite: item.favorite ? 1 : 0,
           usage_count: Number.isInteger(item.usageCount) && item.usageCount >= 0 ? item.usageCount : 0,
+          metadata: JSON.stringify(item.metadata || {}),
           created: item.created || now,
           updated: item.updated || now,
         };

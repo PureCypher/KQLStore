@@ -79,3 +79,34 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: ci
+
+  # -------------------------------------------------------------------------
+  # Base images. Both Dockerfiles pin by digest, which removes the risk of a tag
+  # moving under you but also removes the automatic security patching a tag gave —
+  # a pinned digest never updates itself. Dependabot rewrites `FROM image@sha256:...`
+  # in place, which is what makes the pinning maintainable rather than a slow rot.
+  # Note a rebuild is still required for a patched base to reach a running pod.
+  # -------------------------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/London
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: docker
+    directory: /api
+    schedule:
+      interval: weekly
+      day: monday
+      time: '07:00'
+      timezone: Europe/London
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope

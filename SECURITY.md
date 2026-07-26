@@ -129,16 +129,18 @@ unauthenticated database on your network, and the fault is not in the code.
 
 ### Supply chain
 
-- The frontend image pins both of its base images by digest rather than by tag — `node:22-alpine`
-  for the build stage and `nginx:1.27-alpine` for the runtime — so two builds of the same commit
-  produce the same bytes and "rebuild and compare" remains a usable incident-response step.
-  `api/Dockerfile` does not yet do this; see the residual risks below.
-- Dependencies install from committed lockfiles, and the frontend build uses `npm ci
-  --ignore-scripts` — the largest install-time execution surface in a tree that contains a bundler
-  and a CSS compiler, both of which write the JavaScript later served from a trusted origin. The
-  API image runs `npm ci --omit=dev`, falling back to `npm install` if the lockfile and the
-  manifest have drifted; that fallback resolves versions afresh rather than failing, so treat a
-  lockfile change in a pull request as a supply-chain change.
+- Both images pin their base images by digest rather than by tag — `node:22-alpine` and
+  `nginx:1.27-alpine` for the frontend, `node:22-alpine` for the API — so two builds of the same
+  commit produce the same bytes and "rebuild and compare" remains a usable incident-response step.
+  The API declares its base once and both of its stages inherit it, so the two cannot drift apart.
+- Dependencies install from committed lockfiles. The frontend build uses `npm ci --ignore-scripts`
+  — the largest install-time execution surface in a tree that contains a bundler and a CSS
+  compiler, both of which write the JavaScript later served from a trusted origin. The API image
+  runs a strict `npm ci --omit=dev` in a builder stage: it cannot use `--ignore-scripts` because
+  better-sqlite3 11.x and 12.x fetch their prebuilt binary from an install script, so that script
+  is trusted by necessity. It no longer falls back to `npm install` — the previous form swallowed
+  the error and resolved versions afresh, which silently produced a different dependency tree than
+  the lockfile describes. Treat a lockfile change in a pull request as a supply-chain change.
 - GitHub Actions are pinned to full commit SHAs; the workflow's default token is read-only.
 
 ### Known residual risk
@@ -163,10 +165,14 @@ unauthenticated database on your network, and the fault is not in the code.
   the operator — see the README.
 - **`style-src 'unsafe-inline'`.** Required by React's `style` prop, which produces inline style
   attributes. Removing it means moving every dynamic colour into a class.
-- **The API image's base is pinned by tag, not digest.** `api/Dockerfile` starts from
-  `node:22-alpine`, a mutable pointer, so a rebuild of an old commit does not necessarily
-  reproduce the image that was deployed from it. The frontend image is pinned by digest and this
-  one should follow.
+- **The API's install scripts are trusted.** better-sqlite3 11.x and 12.x download their prebuilt
+  binary from a package install script, so the API image cannot use `--ignore-scripts` the way the
+  frontend does. Moving to better-sqlite3 13.x would remove this: it ships its binaries inside the
+  package and needs no install script. Until then, a compromised release of that package executes
+  at image build time.
+- **Base image digests are pinned but not automatically updated.** A pinned digest never picks up a
+  security patch on its own. Dependabot is configured to rewrite them, but a rebuild is still
+  required for the fix to reach a running pod.
 - **No secrets management, because there are no secrets.** The application stores none, reads no
   credentials and holds no connection to Microsoft. The sensitive asset is the query store itself
   — your detection logic, which tells a reader precisely what you do and do not detect. Schema v4

@@ -1,0 +1,833 @@
+# ---------------------------------------------------------------------------
+# Off-node copy of the nightly SQLite backup.
+#
+# THE GAP THIS CLOSES
+#
+# api-backup-cronjob.yaml takes a proper online backup and writes it to a second
+# local-path PVC. That volume is provisioned on the SAME NODE as the live store, because
+# the job has to be pinned there to mount the RWO data volume at all. So the two copies
+# share one disk, one filesystem, one power supply and one motherboard. That protects
+# against the mistakes — a bad import, an application bug, `kubectl delete pvc` on the
+# wrong claim. It does not protect against the failure that actually destroys the store,
+# which is losing the node.
+#
+# This job takes the file the local job already produced, verified, and left on the
+# backup PVC, and pushes it to an S3-compatible endpoint. After that there are two
+# copies on two machines, which is the first point at which the word "backup" is honest.
+#
+# WHY IT RE-USES THE LOCAL BACKUP INSTEAD OF TAKING ITS OWN
+#
+# Taking a second online backup straight from the live database would mean a second
+# reader on the store every night, a second thing that can go wrong while the API is
+# serving, and two files that are supposed to be equivalent but never quite are. Reading
+# the artefact the local job already verified is strictly less risk and gives one lineage
+# with one checksum end to end.
+#
+# The cost is a dependency: if the local job stops working, this job has nothing new to
+# ship. That is handled explicitly rather than hopefully — OFFSITE_MAX_AGE_HOURS makes
+# the job fail when the newest local backup is stale, instead of re-uploading yesterday's
+# file for a month and reporting success every night.
+#
+# SHAPE OF THE POD
+#
+# Four initContainers and one main container, which is just an ordered pipeline — a Pod
+# runs initContainers strictly in sequence and only reaches the main container if every
+# one of them exited 0:
+#
+#   1. stage           (API image)  preflight config, pick the newest local backup,
+#                                   copy it to staging, integrity_check + row count,
+#                                   sha256
+#   2. upload          (rclone)     PUT the file and its .sha256 sidecar, compare sizes
+#   3. verify-download (rclone)     GET the object back into a separate volume
+#   4. verify-restore  (API image)  sha256 match, open it, integrity_check, row count
+#                                   must equal what was staged
+#   5. prune           (rclone)     retention, and only now — pruning is the one
+#                                   destructive step, so it runs last, after the copy it
+#                                   is making room for has been proven restorable
+#
+# Alternating images is the point: the SQLite work needs better-sqlite3, which only the
+# API image has (there is no sqlite3 CLI in it either — see api-backup-cronjob.yaml note
+# 2), and the S3 work needs a client, which the API image does not have.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kqlstore-api-backup-offsite
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-offsite
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # 30 minutes behind the local backup at 03:17, which is comfortably more than the
+  # local job's typical runtime on a store this size and still inside the quiet window.
+  # If the local job ever grows slow enough to overrun this, the staleness check catches
+  # it: the job fails rather than shipping the previous night's file.
+  schedule: "47 3 * * *"
+  timeZone: Europe/London
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Two attempts, then leave the Job Failed and visible. A transient S3 5xx or a
+      # flapping WAN link deserves a retry; a wrong bucket name does not deserve twelve.
+      backoffLimit: 2
+      # Generous compared with the local job: this one crosses a network that may be a
+      # domestic uplink. Still bounded, so a hung transfer surfaces as a failure by
+      # morning rather than as a Job that has been "active" for nine days.
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app: kqlstore-api-backup-offsite
+        spec:
+          # Never, NOT OnFailure — and this was found by running it, not by reading it.
+          #
+          # With OnFailure the kubelet restarts the failed container in place and the Job
+          # controller then deletes the pod when it gives up. The pod is gone by the time
+          # anyone looks, `kubectl logs job/...` returns "error: timed out waiting for the
+          # condition", and the carefully worded preflight message explaining exactly
+          # which key is unset has been thrown away. A job that fails loudly into a log
+          # nobody can retrieve is a job that fails silently.
+          #
+          # With Never, each attempt is a new pod and every failed pod is kept, so the
+          # message survives:
+          #   kubectl -n kqlstore logs job/kqlstore-api-backup-offsite-<id> -c stage
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          # Same hard requirement as the local backup job: the backup PVC is RWO on
+          # local-path, so it only exists on the node that provisioned it, which is the
+          # node the API runs on. Anchoring to the API pod rather than a hardcoded
+          # nodeName keeps this correct if the API is ever rescheduled.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app: kqlstore-api
+                  topologyKey: kubernetes.io/hostname
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # -----------------------------------------------------------------
+            # 1. Preflight, select, stage and verify the file we are about to ship.
+            #
+            # Everything that can be known before touching the network is checked here,
+            # so a misconfigured deployment fails in about two seconds having done
+            # nothing at all, with a message that names the missing keys.
+            # -----------------------------------------------------------------
+            - name: stage
+              image: 192.168.1.76:5001/kqlstore-api:latest
+              imagePullPolicy: Always
+              # As in api-backup-cronjob.yaml: `node -e` resolves require() from the
+              # working directory, and /app is where the API image keeps node_modules.
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-offsite
+                # optional: true is load-bearing. If the Secret is missing, a required
+                # secretRef would leave the pod stuck in CreateContainerConfigError,
+                # which is a failure mode you have to go digging in events to explain.
+                # Optional means the pod starts, the preflight below runs, and the log
+                # says in English which key is not set and which object should hold it.
+                - secretRef:
+                    name: kqlstore-backup-offsite
+                    optional: true
+              env:
+                - name: BACKUP_DIR
+                  value: /backup
+                - name: STAGE_DIR
+                  value: /staging
+                # V8 does not size its heap from the cgroup limit; cap it below the
+                # limit or the pod is OOMKilled instead of collecting.
+                - name: NODE_OPTIONS
+                  value: --max-old-space-size=96
+              command:
+                - node
+                - -e
+                - |
+                  const Database = require('better-sqlite3');
+                  const crypto = require('crypto');
+                  const fs = require('fs');
+                  const path = require('path');
+
+                  // Streamed rather than readFileSync: the heap is capped at 96 MiB and
+                  // a single Buffer of the whole database would be the largest
+                  // allocation in the pod for no reason.
+                  const sha256 = (file) => {
+                    const hash = crypto.createHash('sha256');
+                    const fd = fs.openSync(file, 'r');
+                    const buf = Buffer.alloc(1024 * 1024);
+                    try {
+                      let read;
+                      while ((read = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+                        hash.update(buf.subarray(0, read));
+                      }
+                    } finally {
+                      fs.closeSync(fd);
+                    }
+                    return hash.digest('hex');
+                  };
+
+                  // --- Preflight -------------------------------------------------
+                  // An unconfigured destination must fail the Job, not be skipped. The
+                  // whole value of this CronJob is that `kubectl get cronjob` tells the
+                  // truth about whether an off-node copy exists.
+                  const required = [
+                    ['OFFSITE_ENDPOINT', 'ConfigMap kqlstore-backup-offsite'],
+                    ['OFFSITE_BUCKET', 'ConfigMap kqlstore-backup-offsite'],
+                    ['OFFSITE_ACCESS_KEY_ID', 'Secret kqlstore-backup-offsite'],
+                    ['OFFSITE_SECRET_ACCESS_KEY', 'Secret kqlstore-backup-offsite'],
+                  ];
+                  const unset = required.filter(([key]) => {
+                    const value = process.env[key];
+                    return !value || !value.trim() || value.includes('REPLACE-ME');
+                  });
+                  if (unset.length > 0) {
+                    console.error('OFF-NODE BACKUP IS NOT CONFIGURED - refusing to run.');
+                    console.error('');
+                    for (const [key, where] of unset) {
+                      console.error(`  ${key} is unset or still REPLACE-ME  (${where})`);
+                    }
+                    console.error('');
+                    console.error('Nothing has been uploaded. Fix the objects above, then:');
+                    console.error('  kubectl -n kqlstore create job --from=cronjob/kqlstore-api-backup-offsite offsite-test');
+                    console.error('See docs/maintenance/offsite-backup.md.');
+                    process.exit(1);
+                  }
+
+                  const dir = process.env.BACKUP_DIR;
+                  const stageDir = process.env.STAGE_DIR;
+                  const maxAgeHours = Number(process.env.OFFSITE_MAX_AGE_HOURS || 26);
+
+                  // --- Select ----------------------------------------------------
+                  const backups = fs
+                    .readdirSync(dir)
+                    .filter((name) => /^kqlstore-.*\.db$/.test(name))
+                    .map((name) => ({ name, mtime: fs.statSync(path.join(dir, name)).mtimeMs }))
+                    .sort((a, b) => b.mtime - a.mtime);
+
+                  if (backups.length === 0) {
+                    console.error(`no backup found in ${dir} - has kqlstore-api-backup ever run?`);
+                    console.error('  kubectl -n kqlstore get jobs -l app=kqlstore-api-backup');
+                    process.exit(1);
+                  }
+
+                  const newest = backups[0];
+                  const ageHours = (Date.now() - newest.mtime) / 3600000;
+                  if (ageHours > maxAgeHours) {
+                    // Deliberately fatal. Re-uploading a stale file every night would
+                    // turn a broken local backup into a silent one.
+                    console.error(
+                      `newest local backup ${newest.name} is ${ageHours.toFixed(1)}h old ` +
+                        `(limit ${maxAgeHours}h) - the local backup job is not working.`,
+                    );
+                    console.error('  kubectl -n kqlstore logs -l app=kqlstore-api-backup --tail=50');
+                    process.exit(1);
+                  }
+
+                  // --- Stage and verify ------------------------------------------
+                  // Copy first, then verify the copy: what gets checked has to be the
+                  // exact bytes that get uploaded, not a sibling of them. It also means
+                  // the backup PVC can stay mounted read-only.
+                  const source = path.join(dir, newest.name);
+                  const staged = path.join(stageDir, newest.name);
+                  fs.copyFileSync(source, staged);
+
+                  try {
+                    // The local job takes its copies out of WAL mode, so there are no
+                    // -wal/-shm sidecars to carry and a read-only open needs nothing
+                    // beyond the file itself.
+                    const db = new Database(staged, { readonly: true, fileMustExist: true });
+                    const integrity = db.pragma('integrity_check', { simple: true });
+                    const rows = db.prepare('SELECT COUNT(*) AS n FROM queries').get().n;
+                    db.close();
+
+                    if (integrity !== 'ok') {
+                      throw new Error(`integrity_check returned ${integrity}`);
+                    }
+
+                    const bytes = fs.statSync(staged).size;
+                    const digest = sha256(staged);
+                    fs.writeFileSync(`${staged}.sha256`, `${digest}  ${newest.name}\n`);
+                    // Two files for two consumers: `name` is what the shell steps read,
+                    // manifest.json is what the final Node step compares against.
+                    fs.writeFileSync(path.join(stageDir, 'name'), `${newest.name}\n`);
+                    fs.writeFileSync(
+                      path.join(stageDir, 'manifest.json'),
+                      JSON.stringify({ name: newest.name, bytes, rows, sha256: digest }),
+                    );
+
+                    console.log(
+                      `staged ${newest.name}: ${bytes} bytes, ${rows} queries, ` +
+                        `integrity ok, age ${ageHours.toFixed(1)}h`,
+                    );
+                    console.log(`sha256 ${digest}`);
+                  } catch (err) {
+                    console.error(`staging failed for ${newest.name}: ${err.message}`);
+                    process.exit(1);
+                  }
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                # Read-only, unlike the local backup job's /data mount. That job cannot
+                # use :ro because SQLite needs to write a -shm index for a WAL database;
+                # these files are not in WAL mode and are only ever byte-copied here, so
+                # the stronger mount is available and worth taking.
+                - name: backup
+                  mountPath: /backup
+                  readOnly: true
+                - name: staging
+                  mountPath: /staging
+                - name: tmp
+                  mountPath: /tmp
+
+            # -----------------------------------------------------------------
+            # 2. Upload.
+            # -----------------------------------------------------------------
+            - name: upload
+              # rclone rather than the AWS CLI: one static binary, no Python runtime, an
+              # image that ships arm64 and armv7 (this is a homelab — the node may be a
+              # Pi), and it speaks B2, R2, MinIO and S3 proper through one config.
+              #
+              # Pinned by digest, not by tag. The tag is a mutable pointer; this is the
+              # container that holds the credentials to the only off-node copy of the
+              # store, and it should not be able to change underneath the cluster. The
+              # digest below is the multi-arch OCI index for 1.74.4, resolved with
+              # `skopeo inspect --raw docker://rclone/rclone:1.74.4` and confirmed by
+              # pulling it back — an index digest, so it still selects the right image
+              # on amd64 and arm64 alike.
+              image: rclone/rclone:1.74.4@sha256:c61954aaa32328a5486715dd063a81c7879f5195ad3505cd362deddd509dc4a1
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-offsite
+              env:
+                # rclone takes a whole remote from the environment: every
+                # RCLONE_CONFIG_<REMOTE>_<KEY> becomes a field of remote "offsite". No
+                # config file to template, no Secret rendered onto a volume, and the
+                # credentials never touch disk.
+                - name: RCLONE_CONFIG_OFFSITE_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_OFFSITE_PROVIDER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_PROVIDER
+                - name: RCLONE_CONFIG_OFFSITE_ENDPOINT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ENDPOINT
+                - name: RCLONE_CONFIG_OFFSITE_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_REGION
+                - name: RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ACCESS_KEY_ID
+                      optional: true
+                - name: RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_SECRET_ACCESS_KEY
+                      optional: true
+                # Never look for env_auth credentials (IMDS, ~/.aws). If the Secret is
+                # empty the job must fail with a credential error, not quietly pick up
+                # whatever the node's instance role happens to allow.
+                - name: RCLONE_CONFIG_OFFSITE_ENV_AUTH
+                  value: "false"
+                # The rootfs is read-only and HOME is /root, which uid 1000 cannot read.
+                # Point everything rclone might write at the tmp emptyDir. Without this
+                # it fails on the config lookup before it makes a single request.
+                - name: HOME
+                  value: /tmp
+                # Empty on purpose, not a path. rclone reads "" as "use no config file
+                # at all", which both suppresses a NOTICE on every single invocation and
+                # guarantees the remote can only ever come from the environment above —
+                # there is no file for a stray credential to be read out of.
+                - name: RCLONE_CONFIG
+                  value: ""
+                - name: RCLONE_CACHE_DIR
+                  value: /tmp/rclone-cache
+                - name: RCLONE_TEMP_DIR
+                  value: /tmp
+                # Skip the HeadBucket rclone would otherwise issue before each upload,
+                # so the credential only needs write access to one prefix rather than
+                # bucket-level permissions. A wrong bucket name still fails loudly, on
+                # the PUT, with NoSuchBucket.
+                - name: RCLONE_S3_NO_CHECK_BUCKET
+                  value: "true"
+              # The image's ENTRYPOINT is rclone itself, so a shell has to be asked for
+              # explicitly. `set -eu` matters: without -e a failed rclone leaves the
+              # script running and the container exits 0 on the last echo.
+              command:
+                - /bin/sh
+                - -euc
+                - |
+                  NAME="$(cat /staging/name)"
+                  DEST="offsite:${OFFSITE_BUCKET}/${OFFSITE_PREFIX}"
+                  echo "uploading ${NAME} -> ${DEST}/"
+
+                  # rclone verifies the S3 ETag against the local MD5 on upload and
+                  # errors with "corrupted on transfer" if they differ, so this is
+                  # already checksummed in flight. The size comparison below catches the
+                  # other half - an object that exists but was truncated by an endpoint
+                  # that accepted the PUT and stored less than it was sent.
+                  rclone copyto "/staging/${NAME}" "${DEST}/${NAME}"
+                  rclone copyto "/staging/${NAME}.sha256" "${DEST}/${NAME}.sha256"
+
+                  LOCAL_BYTES="$(stat -c %s "/staging/${NAME}")"
+                  REMOTE_BYTES="$(rclone lsl "${DEST}/${NAME}" | awk 'NR==1{print $1}')"
+                  if [ "${LOCAL_BYTES}" != "${REMOTE_BYTES}" ]; then
+                    echo "FAILED: staged ${LOCAL_BYTES} bytes, remote object is '${REMOTE_BYTES}'" >&2
+                    exit 1
+                  fi
+                  echo "upload ok: ${DEST}/${NAME} (${REMOTE_BYTES} bytes)"
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: staging
+                  mountPath: /staging
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+
+            # -----------------------------------------------------------------
+            # 3. Read the object back.
+            #
+            # Separate volume from /staging on purpose. Downloading over the staged copy
+            # would let a no-op "download" pass verification against the file it was
+            # supposed to have replaced, which is precisely the class of self-confirming
+            # test this step exists to avoid.
+            # -----------------------------------------------------------------
+            - name: verify-download
+              image: rclone/rclone:1.74.4@sha256:c61954aaa32328a5486715dd063a81c7879f5195ad3505cd362deddd509dc4a1
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-offsite
+              env:
+                - name: RCLONE_CONFIG_OFFSITE_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_OFFSITE_PROVIDER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_PROVIDER
+                - name: RCLONE_CONFIG_OFFSITE_ENDPOINT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ENDPOINT
+                - name: RCLONE_CONFIG_OFFSITE_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_REGION
+                - name: RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ACCESS_KEY_ID
+                      optional: true
+                - name: RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_SECRET_ACCESS_KEY
+                      optional: true
+                - name: RCLONE_CONFIG_OFFSITE_ENV_AUTH
+                  value: "false"
+                - name: HOME
+                  value: /tmp
+                # Empty on purpose, not a path. rclone reads "" as "use no config file
+                # at all", which both suppresses a NOTICE on every single invocation and
+                # guarantees the remote can only ever come from the environment above —
+                # there is no file for a stray credential to be read out of.
+                - name: RCLONE_CONFIG
+                  value: ""
+                - name: RCLONE_CACHE_DIR
+                  value: /tmp/rclone-cache
+                - name: RCLONE_TEMP_DIR
+                  value: /tmp
+              command:
+                - /bin/sh
+                - -euc
+                - |
+                  if [ "${OFFSITE_VERIFY_ROUNDTRIP}" != "true" ]; then
+                    echo "WARNING: OFFSITE_VERIFY_ROUNDTRIP is '${OFFSITE_VERIFY_ROUNDTRIP}'."
+                    echo "WARNING: the uploaded object will NOT be read back or opened."
+                    echo "WARNING: this backup is unproven beyond its byte count."
+                    exit 0
+                  fi
+                  NAME="$(cat /staging/name)"
+                  rclone copyto "offsite:${OFFSITE_BUCKET}/${OFFSITE_PREFIX}/${NAME}" "/verify/${NAME}"
+                  echo "downloaded back: $(stat -c %s "/verify/${NAME}") bytes"
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: staging
+                  mountPath: /staging
+                  readOnly: true
+                - name: verify
+                  mountPath: /verify
+                - name: tmp
+                  mountPath: /tmp
+
+            # -----------------------------------------------------------------
+            # 4. Prove the downloaded object is a restorable database.
+            #
+            # This is the step that makes the difference between "the bytes moved" and
+            # "there is a backup". A backup nobody has opened is a hypothesis; opening
+            # this one every night turns the restore path into something that has been
+            # exercised within the last 24 hours, every time.
+            # -----------------------------------------------------------------
+            - name: verify-restore
+              image: 192.168.1.76:5001/kqlstore-api:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-offsite
+              env:
+                - name: VERIFY_DIR
+                  value: /verify
+                - name: STAGE_DIR
+                  value: /staging
+                - name: NODE_OPTIONS
+                  value: --max-old-space-size=96
+              command:
+                - node
+                - -e
+                - |
+                  const Database = require('better-sqlite3');
+                  const crypto = require('crypto');
+                  const fs = require('fs');
+                  const path = require('path');
+
+                  if (process.env.OFFSITE_VERIFY_ROUNDTRIP !== 'true') {
+                    console.warn('WARNING: round-trip verification disabled - not opening the remote copy.');
+                    process.exit(0);
+                  }
+
+                  const sha256 = (file) => {
+                    const hash = crypto.createHash('sha256');
+                    const fd = fs.openSync(file, 'r');
+                    const buf = Buffer.alloc(1024 * 1024);
+                    try {
+                      let read;
+                      while ((read = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+                        hash.update(buf.subarray(0, read));
+                      }
+                    } finally {
+                      fs.closeSync(fd);
+                    }
+                    return hash.digest('hex');
+                  };
+
+                  try {
+                    const meta = JSON.parse(
+                      fs.readFileSync(path.join(process.env.STAGE_DIR, 'manifest.json'), 'utf8'),
+                    );
+                    const file = path.join(process.env.VERIFY_DIR, meta.name);
+
+                    const bytes = fs.statSync(file).size;
+                    if (bytes !== meta.bytes) {
+                      throw new Error(`size mismatch: uploaded ${meta.bytes}, retrieved ${bytes}`);
+                    }
+
+                    const digest = sha256(file);
+                    if (digest !== meta.sha256) {
+                      throw new Error(`sha256 mismatch: uploaded ${meta.sha256}, retrieved ${digest}`);
+                    }
+
+                    const db = new Database(file, { readonly: true, fileMustExist: true });
+                    const integrity = db.pragma('integrity_check', { simple: true });
+                    const rows = db.prepare('SELECT COUNT(*) AS n FROM queries').get().n;
+                    db.close();
+
+                    if (integrity !== 'ok') {
+                      throw new Error(`integrity_check on the retrieved copy returned ${integrity}`);
+                    }
+                    // A retrieved copy that opens cleanly but holds a different number
+                    // of rows is not the backup that was verified upstream.
+                    if (rows !== meta.rows) {
+                      throw new Error(`row count mismatch: uploaded ${meta.rows}, retrieved ${rows}`);
+                    }
+
+                    console.log(
+                      `off-node copy verified: ${meta.name} restored from ` +
+                        `${process.env.OFFSITE_BUCKET}/${process.env.OFFSITE_PREFIX}, ` +
+                        `${bytes} bytes, ${rows} queries, integrity ok`,
+                    );
+                    console.log(`sha256 ${digest}`);
+                  } catch (err) {
+                    console.error(`OFF-NODE COPY FAILED VERIFICATION: ${err.message}`);
+                    console.error('The object in the bucket must not be trusted as a restore source.');
+                    process.exit(1);
+                  }
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: staging
+                  mountPath: /staging
+                  readOnly: true
+                - name: verify
+                  mountPath: /verify
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+
+          containers:
+            # -----------------------------------------------------------------
+            # 5. Retention, last, because it is the only step that deletes anything.
+            #
+            # AGE ALONE IS NOT ENOUGH, AND THE FAILURE IS NOT OBVIOUS
+            #
+            # Prune-by-age assumes backups keep arriving. Consider the job broken for
+            # five weeks - a rotated credential, a full bucket, a dead uplink - and then
+            # fixed. The next run uploads one fresh copy and, on an age-only rule,
+            # deletes every copy older than OFFSITE_RETENTION_DAYS. That is all of them.
+            # The archive collapses from 30 copies to 1 in a single sweep, at the exact
+            # moment you are least sure the store is healthy, and if today's copy is a
+            # backup of an already-damaged database there is now nothing to go back to.
+            #
+            # OFFSITE_MIN_COPIES is the floor: the newest N objects are never deleted,
+            # whatever their age. It trades a little storage for the guarantee that a
+            # burst of failures cannot age out the entire archive.
+            # -----------------------------------------------------------------
+            - name: prune
+              image: rclone/rclone:1.74.4@sha256:c61954aaa32328a5486715dd063a81c7879f5195ad3505cd362deddd509dc4a1
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-offsite
+              env:
+                - name: RCLONE_CONFIG_OFFSITE_TYPE
+                  value: s3
+                - name: RCLONE_CONFIG_OFFSITE_PROVIDER
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_PROVIDER
+                - name: RCLONE_CONFIG_OFFSITE_ENDPOINT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ENDPOINT
+                - name: RCLONE_CONFIG_OFFSITE_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_REGION
+                - name: RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_ACCESS_KEY_ID
+                      optional: true
+                - name: RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: kqlstore-backup-offsite
+                      key: OFFSITE_SECRET_ACCESS_KEY
+                      optional: true
+                - name: RCLONE_CONFIG_OFFSITE_ENV_AUTH
+                  value: "false"
+                - name: HOME
+                  value: /tmp
+                # Empty on purpose, not a path. rclone reads "" as "use no config file
+                # at all", which both suppresses a NOTICE on every single invocation and
+                # guarantees the remote can only ever come from the environment above —
+                # there is no file for a stray credential to be read out of.
+                - name: RCLONE_CONFIG
+                  value: ""
+                - name: RCLONE_CACHE_DIR
+                  value: /tmp/rclone-cache
+                - name: RCLONE_TEMP_DIR
+                  value: /tmp
+              command:
+                - /bin/sh
+                - -euc
+                - |
+                  DEST="offsite:${OFFSITE_BUCKET}/${OFFSITE_PREFIX}"
+
+                  # Sorted newest-first. The names carry an ISO-8601 stamp, so a reverse
+                  # lexical sort is a reverse chronological sort, with no date parsing
+                  # in busybox and no dependence on the remote's own ordering.
+                  rclone lsf "${DEST}/" --include "kqlstore-*.db" | sort -r > /tmp/all
+                  TOTAL="$(wc -l < /tmp/all | tr -d ' ')"
+
+                  # --min-age filters on the object's modification time, which for these
+                  # objects is when the copy landed here, not when the backup was taken.
+                  # Retention is therefore measured from arrival off-node, which is the
+                  # more useful clock: it is the age of the protection, not of the data.
+                  rclone lsf "${DEST}/" --include "kqlstore-*.db" \
+                    --min-age "${OFFSITE_RETENTION_DAYS}d" | sort -r > /tmp/expired
+                  EXPIRED="$(wc -l < /tmp/expired | tr -d ' ')"
+
+                  ALLOWED=$(( TOTAL - OFFSITE_MIN_COPIES ))
+                  if [ "${ALLOWED}" -lt 0 ]; then ALLOWED=0; fi
+                  DELETE="${EXPIRED}"
+                  if [ "${DELETE}" -gt "${ALLOWED}" ]; then DELETE="${ALLOWED}"; fi
+
+                  echo "retention: ${TOTAL} copies, ${EXPIRED} older than ${OFFSITE_RETENTION_DAYS}d, floor ${OFFSITE_MIN_COPIES}, deleting ${DELETE}"
+
+                  if [ "${DELETE}" -gt 0 ]; then
+                    # tail of a newest-first list is the oldest entries: always delete
+                    # from the far end, never from the middle.
+                    tail -n "${DELETE}" /tmp/expired > /tmp/doomed
+                    while IFS= read -r OBJECT; do
+                      [ -n "${OBJECT}" ] || continue
+                      echo "pruning ${OBJECT}"
+                      rclone deletefile "${DEST}/${OBJECT}"
+                      # The sidecar is best-effort: an object uploaded before sidecars
+                      # existed, or one deleted by hand, must not fail the whole job.
+                      rclone deletefile "${DEST}/${OBJECT}.sha256" 2>/dev/null \
+                        || echo "  (no .sha256 sidecar alongside ${OBJECT})"
+                    done < /tmp/doomed
+                  fi
+
+                  REMAINING="$(rclone lsf "${DEST}/" --include "kqlstore-*.db" | wc -l | tr -d ' ')"
+                  echo "off-node backup complete: ${REMAINING} copies retained at ${DEST}"
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: kqlstore-api-backup
+            # Staging and verification are emptyDir, not PVCs: both are scratch for the
+            # length of one Job and must not survive it. sizeLimit caps them so a
+            # runaway copy evicts this pod rather than filling the node's root disk and
+            # taking the API down with it. Raise both together if the store outgrows it.
+            - name: staging
+              emptyDir:
+                sizeLimit: 512Mi
+            - name: verify
+              emptyDir:
+                sizeLimit: 512Mi
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+---
+# This job is the one thing in the namespace that is SUPPOSED to talk to the outside
+# world, so it cannot reuse the deny-all policy that ships with the local backup job.
+# Hence the separate app: kqlstore-api-backup-offsite label — reusing
+# app: kqlstore-api-backup would have silently inherited egress: [] and left the upload
+# hanging until activeDeadlineSeconds with no explanation in the pod log.
+#
+# Ingress stays empty: nothing should ever connect TO a backup job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-api-backup-offsite
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-offsite
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: kqlstore-api-backup-offsite
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # DNS, without which the endpoint hostname never resolves and the failure looks like
+    # a network outage rather than a policy. Not restricted to the kube-system
+    # namespace by selector: CoreDNS lives there on most distributions but not all, and
+    # a backup that stops working after a cluster upgrade is a poor trade for narrowing
+    # a rule to port 53.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The S3 endpoint. Left wide because the destination is the operator's choice and
+    # could be a bucket on the internet, a NAS on the LAN or a MinIO Service in this
+    # cluster — but narrow it once you have chosen. Replacing 0.0.0.0/0 with the
+    # endpoint's own address is a two-line edit and turns this from "the backup job may
+    # dial anywhere" into "the backup job may dial the bucket".
+    #
+    # 169.254.0.0/16 is excluded regardless: that is the cloud metadata service, and a
+    # job holding S3 credentials has no business reaching an instance role.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+        # MinIO's default. Add your own port here if the endpoint uses another.
+        - protocol: TCP
+          port: 9000

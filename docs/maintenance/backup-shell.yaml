@@ -7,16 +7,19 @@
 #   - The backup CronJob's pods mount both, but they exit in seconds; `kubectl cp`
 #     needs a container that is still running.
 #
-# Two uses, described in README.md:
-#   1. Pull backups off the node.       kubectl -n kqlstore cp kqlstore-maint:/backup ./kqlstore-backups
-#   2. Restore a backup over the store. Scale the API to 0 FIRST — see below.
+# Three uses, all written out step by step in docs/maintenance/restore-runbook.md:
+#   1. Pull backups off the node.  kubectl -n kqlstore cp -c shell kqlstore-maint:/backup ./kqlstore-backups
+#      (-c shell is required now that this pod has two containers)
+#   2. Restore from the local backup PVC.       Scale the API to 0 FIRST — see below.
+#   3. Restore from the off-node bucket.        Use the `fetch` container — see below.
 #
 # NOT part of the deployment: it is deliberately absent from k8s/kustomization.yaml
 # so it is never left running. Apply it, use it, delete it.
 #
 # Change the image to match your registry, exactly as in k8s/api-deployment.yaml.
 # It reuses the API image on purpose: that is the only image known to carry a
-# better-sqlite3 build matching this database, should you need to inspect one.
+# better-sqlite3 build matching this database, which is what lets you verify a
+# restore candidate before you put it in place rather than afterwards.
 # ---------------------------------------------------------------------------
 apiVersion: v1
 kind: Pod
@@ -24,11 +27,17 @@ metadata:
   name: kqlstore-maint
   namespace: kqlstore
   labels:
-    # Labelled as the backup workload, not the API: app=kqlstore-api is the API
-    # Service's selector, and adopting it would make Kubernetes load-balance live
-    # traffic into a pod that serves no HTTP. This label also picks up the deny-all
-    # NetworkPolicy that ships beside the CronJob, so the pod gets no network.
-    app: kqlstore-api-backup
+    # Labelled as the OFF-NODE backup workload, not the API and not the local backup
+    # job. Two reasons, and the second one bites hard if you get it wrong:
+    #   - app=kqlstore-api is the API Service's selector, and adopting it would make
+    #     Kubernetes load-balance live traffic into a pod that serves no HTTP.
+    #   - app=kqlstore-api-backup carries the deny-all NetworkPolicy that ships beside
+    #     the local CronJob. That is correct for a job that only touches local disks,
+    #     but it would leave the `fetch` container below unable to resolve DNS or reach
+    #     the bucket, and the symptom is a `rclone` that simply hangs.
+    # This label picks up the off-node job's policy instead: egress to the endpoint,
+    # still no ingress from anywhere.
+    app: kqlstore-api-backup-offsite
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
@@ -76,7 +85,7 @@ spec:
         # before writing here: two processes with the same SQLite file open, one of
         # them replacing it underneath the other, is how a store gets corrupted.
         #   kubectl -n kqlstore scale deploy/kqlstore-api --replicas=0
-        #   kubectl -n kqlstore exec kqlstore-maint -- sh -c '
+        #   kubectl -n kqlstore exec kqlstore-maint -c shell -- sh -c '
         #     rm -f /data/kqlstore.db /data/kqlstore.db-wal /data/kqlstore.db-shm &&
         #     cp /backup/kqlstore-<stamp>Z.db /data/kqlstore.db'
         #   kubectl -n kqlstore scale deploy/kqlstore-api --replicas=1
@@ -84,8 +93,112 @@ spec:
         # behind lets SQLite replay them over the copy you just restored.
         - name: data
           mountPath: /data
+        # Where the `fetch` container below leaves a download from the bucket. This
+        # container is the only one with better-sqlite3, so it is the only one that can
+        # answer the question that matters — is this file a working database? — and it
+        # is the only one that can put the answer into /data afterwards.
+        - name: restore
+          mountPath: /restore
         - name: tmp
           mountPath: /tmp
+
+    # -----------------------------------------------------------------------
+    # Second container, for restoring from the off-node copy rather than the local
+    # PVC — the case that matters when the reason you are here is that the node is
+    # gone. Same rclone image and same credential wiring as
+    # k8s/api-backup-offsite-cronjob.yaml, so there is nothing new to configure and
+    # nothing new to get wrong at 02:00.
+    #
+    #   kubectl -n kqlstore exec kqlstore-maint -c fetch -- rclone lsl offsite:BUCKET/PREFIX/
+    #   kubectl -n kqlstore exec kqlstore-maint -c fetch -- \
+    #     rclone copyto offsite:BUCKET/PREFIX/kqlstore-<stamp>Z.db /restore/candidate.db
+    #
+    # It writes to /restore, NOT to /data. Downloading straight over the live database
+    # would leave you with a half-written file and no way back if the transfer fails
+    # midway. Verify the candidate with the `shell` container first, then move it into
+    # place. The runbook walks through it.
+    #
+    # If the off-node backup is not configured this container still starts and rclone
+    # simply has no credentials — the Secret is referenced with optional: true, exactly
+    # as in the CronJob.
+    # -----------------------------------------------------------------------
+    - name: fetch
+      image: rclone/rclone:1.74.4@sha256:c61954aaa32328a5486715dd063a81c7879f5195ad3505cd362deddd509dc4a1
+      command: ["sleep", "3600"]
+      envFrom:
+        - configMapRef:
+            name: kqlstore-backup-offsite
+            optional: true
+      env:
+        - name: RCLONE_CONFIG_OFFSITE_TYPE
+          value: s3
+        - name: RCLONE_CONFIG_OFFSITE_PROVIDER
+          valueFrom:
+            configMapKeyRef:
+              name: kqlstore-backup-offsite
+              key: OFFSITE_PROVIDER
+              optional: true
+        - name: RCLONE_CONFIG_OFFSITE_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: kqlstore-backup-offsite
+              key: OFFSITE_ENDPOINT
+              optional: true
+        - name: RCLONE_CONFIG_OFFSITE_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: kqlstore-backup-offsite
+              key: OFFSITE_REGION
+              optional: true
+        - name: RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: kqlstore-backup-offsite
+              key: OFFSITE_ACCESS_KEY_ID
+              optional: true
+        - name: RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: kqlstore-backup-offsite
+              key: OFFSITE_SECRET_ACCESS_KEY
+              optional: true
+        - name: RCLONE_CONFIG_OFFSITE_ENV_AUTH
+          value: "false"
+        # Read-only rootfs and HOME=/root, which uid 1000 cannot read. Everything
+        # rclone might write goes to the tmp emptyDir.
+        - name: HOME
+          value: /tmp
+        # Empty on purpose: rclone reads "" as "use no config file", which keeps the
+        # remote definition entirely in the environment and silences a NOTICE on every
+        # command.
+        - name: RCLONE_CONFIG
+          value: ""
+        - name: RCLONE_CACHE_DIR
+          value: /tmp/rclone-cache
+        - name: RCLONE_TEMP_DIR
+          value: /tmp
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+      volumeMounts:
+        # Deliberately does NOT mount /data. This container has network access and
+        # holds bucket credentials; it has no reason to be able to write to the live
+        # store, and not mounting it means it cannot.
+        - name: restore
+          mountPath: /restore
+        - name: tmp
+          mountPath: /tmp
+
   volumes:
     - name: backup
       persistentVolumeClaim:
@@ -93,5 +206,13 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: kqlstore-api-data
+    # Shared scratch between the two containers: `fetch` downloads here, `shell`
+    # verifies from here. emptyDir, so a forgotten download does not outlive the pod.
+    # Raise sizeLimit if the store outgrows it — a truncated download would otherwise
+    # look like a corrupt backup.
+    - name: restore
+      emptyDir:
+        sizeLimit: 512Mi
     - name: tmp
-      emptyDir: {}
+      emptyDir:
+        sizeLimit: 64Mi

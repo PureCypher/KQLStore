@@ -52,7 +52,12 @@ spec:
           labels:
             app: kqlstore-api-backup
         spec:
-          restartPolicy: OnFailure
+          # Never, not OnFailure. OnFailure has the Job controller delete the pod once it
+          # gives up, which takes the log with it — so the one run whose output you
+          # actually need, the failed one, is the one you cannot read. With Never each
+          # attempt is a separate pod and the failures are all still there to read:
+          #   kubectl -n kqlstore logs job/kqlstore-api-backup-<id>
+          restartPolicy: Never
           # Nothing here talks to the Kubernetes API.
           automountServiceAccountToken: false
           # MUST run on the same node as the API pod.
@@ -95,6 +100,21 @@ spec:
                   value: /backup
                 - name: RETENTION_DAYS
                   value: "14"
+                # Floor on the number of copies kept, applied before the age rule.
+                #
+                # Prune-by-age quietly assumes backups keep arriving. If this job breaks
+                # for three weeks and is then fixed, the first successful run writes one
+                # new copy and deletes everything older than RETENTION_DAYS — which by
+                # then is every other copy on the volume. The archive goes from 14 to 1
+                # in one sweep, at the moment you are least sure the store is healthy,
+                # and if the new copy is a faithful backup of an already-damaged
+                # database there is nothing left to go back to.
+                #
+                # MIN_COPIES keeps the newest N regardless of age. Half the window: long
+                # enough to cover a weekend of failures, short enough that it does not
+                # quietly become the real retention policy.
+                - name: MIN_COPIES
+                  value: "7"
                 # Same reasoning as the API deployment: V8 does not derive its heap
                 # ceiling from the cgroup limit, so cap it below the limit or the pod is
                 # OOMKilled instead of collecting.
@@ -111,6 +131,7 @@ spec:
                   const src = process.env.DB_PATH;
                   const dir = process.env.BACKUP_DIR;
                   const keepDays = Number(process.env.RETENTION_DAYS || 14);
+                  const minCopies = Number(process.env.MIN_COPIES || 7);
                   const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
                   const dest = path.join(dir, `kqlstore-${stamp}Z.db`);
 
@@ -118,6 +139,12 @@ spec:
                   // live store. This is the real safety boundary — not the mount flag,
                   // which cannot be :ro here (see the volumeMount comment below).
                   const db = new Database(src, { readonly: true });
+
+                  // Counted before the snapshot so the copy can be compared against the
+                  // thing it is a copy of. Without this the job cannot tell a good
+                  // backup from a technically-valid backup of the wrong file: an empty
+                  // database passes integrity_check perfectly.
+                  const srcRows = db.prepare('SELECT COUNT(*) AS n FROM queries').get().n;
 
                   db.backup(dest)
                     .then(() => {
@@ -131,19 +158,45 @@ spec:
                       const rows = copy.prepare('SELECT COUNT(*) AS n FROM queries').get().n;
                       copy.close();
                       if (integrity !== 'ok') throw new Error(`integrity_check returned ${integrity}`);
-                      console.log(`backup ok: ${dest} (${fs.statSync(dest).size} bytes, ${rows} queries)`);
+                      // An empty copy of a non-empty store is the failure integrity_check
+                      // cannot see, and it is the one that matters: it looks like a
+                      // perfectly healthy backup right up until the restore.
+                      if (rows === 0 && srcRows > 0) {
+                        throw new Error(`backup holds 0 queries but the store holds ${srcRows}`);
+                      }
+                      console.log(
+                        `backup ok: ${dest} (${fs.statSync(dest).size} bytes, ` +
+                          `${rows} queries, store had ${srcRows})`,
+                      );
 
                       // Prune only after a verified good backup exists, so a run that
                       // fails can never erode the retention window on its way out.
+                      //
+                      // Newest first, then skip the first minCopies before applying the
+                      // age rule: age alone would let one successful run after a long
+                      // outage delete every copy on the volume. See MIN_COPIES above.
                       const cutoff = Date.now() - keepDays * 86400000;
-                      for (const name of fs.readdirSync(dir)) {
-                        if (!/^kqlstore-.*\.db$/.test(name)) continue;
-                        const p = path.join(dir, name);
-                        if (fs.statSync(p).mtimeMs < cutoff) {
+                      const copies = fs
+                        .readdirSync(dir)
+                        .filter((name) => /^kqlstore-.*\.db$/.test(name))
+                        .map((name) => {
+                          const p = path.join(dir, name);
+                          return { p, mtimeMs: fs.statSync(p).mtimeMs };
+                        })
+                        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+                      let pruned = 0;
+                      for (const { p, mtimeMs } of copies.slice(minCopies)) {
+                        if (mtimeMs < cutoff) {
                           fs.unlinkSync(p);
                           console.log(`pruned: ${p}`);
+                          pruned += 1;
                         }
                       }
+                      console.log(
+                        `retention: ${copies.length - pruned} copies kept ` +
+                          `(${keepDays}d, floor ${minCopies}), ${pruned} pruned`,
+                      );
                     })
                     .catch((err) => {
                       console.error(`backup failed: ${err.message}`);

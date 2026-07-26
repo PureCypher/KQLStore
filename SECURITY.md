@@ -23,6 +23,9 @@ acknowledgement within a week. Fixes land on `main`; there is no backport branch
 - The SPA in `src/` — cross-site scripting, particularly through the syntax highlighter in
   `src/domain/highlight.js`, whose output is rendered as markup; prototype pollution through
   imported JSON; anything that turns stored data into executed code; a CSP bypass.
+- The export generators in `src/export/` — an injection that turns stored query text into
+  something harmful in the *consumer* of the file, such as YAML that breaks out of the block scalar
+  it is emitted in, or a `references` entry carrying a non-`http` scheme into a downstream tool.
 - The container images and `k8s/` manifests — privilege escalation, an over-broad NetworkPolicy,
   a writable path that should not be writable, a secret that ends up in an image layer, a backup
   that is not a valid restore.
@@ -95,8 +98,11 @@ unauthenticated database on your network, and the fault is not in the code.
   prepared statement with bound parameters. There is no string-concatenated SQL in the codebase.
 - **Server-side input validation** (`api/validate.js`) on every write path, enforcing type, length
   and enumeration bounds independently of the browser: name 200 characters, query 50 000,
-  description 1 000, table 200, at most 20 tags of 50 characters, at most 1 000 items per import,
-  a maximum page size of 1 000, and `category` restricted to a fixed list. The body parser is
+  description 1 000, table 200, at most 20 tags of 50 characters, a detection metadata block of
+  20 000 characters serialised, at most 1 000 items per import, a maximum page size of 1 000, and
+  `category` restricted to a fixed list. The detection block is bounded as a whole rather than
+  field by field — the API's job there is to stop it being used as unbounded storage, and the
+  vocabulary checks are the SPA's, which is stated as a residual risk below. The body parser is
   capped at 2 MB and nginx's `client_max_body_size` matches, so an oversized body is rejected at
   the proxy rather than parsed. Without these bounds a single request could write enough into the
   PVC to make every subsequent `GET /api/queries` exhaust the pod's memory — while `/api/health`
@@ -105,8 +111,11 @@ unauthenticated database on your network, and the fault is not in the code.
   cannot be given a credential. It used to return the query count, which handed anyone who could
   reach the port the size of the estate's detection library for free; it now reports only status,
   writability and a timestamp.
-- **Defensive parsing of stored data.** The `tags` column holds JSON; it is parsed inside a guard
-  so one malformed row cannot take down list, get and export together.
+- **Defensive parsing of stored data.** Two columns hold JSON — `tags` and the v4 `metadata`
+  document — and both are parsed inside a guard that coerces the result to the expected shape, so one
+  malformed row cannot take down list, get and export together.
+- **URL fields are restricted to `http` and `https`.** A query's `references` are parsed with
+  `new URL()` and any other scheme is rejected: that field is a link, not a script sink.
 - **CORS off by default.** In the shipped topology nginx makes the browser same-origin, so the
   CORS middleware is not mounted at all unless `CORS_ORIGIN` is set explicitly. It previously
   reflected every origin, which let any page on the network read and write the entire store.
@@ -134,9 +143,17 @@ unauthenticated database on your network, and the fault is not in the code.
 
 ### Known residual risk
 
-- **No audit trail.** The schema has no author column and the API logs no history. Access knows
-  who authenticated; the application does not record who changed what. Anyone who can reach the
-  app can delete every query, and nothing in the database will say who did.
+- **No audit trail.** Schema v4 added an `author` field, but it is self-declared metadata typed
+  into a form, not attribution: nothing verifies it and nothing stops the next editor changing it.
+  The API logs no history. Access knows who authenticated; the application does not record who
+  changed what. Anyone who can reach the app can delete every query, and nothing in the database
+  will say who did.
+- **Detection metadata is validated in the browser, not at the API.** `api/validate.js` bounds the
+  block's serialised size and rejects a non-object; the ATT&CK, severity and entity vocabularies are
+  enforced by `src/domain/validate.js`, which a direct caller does not run. The consequence is
+  bad data rather than a foothold — a technique ID that matches nothing in the Navigator layer —
+  but it is client-side validation being load-bearing for correctness, and it is written down here
+  rather than assumed.
 - **Stored query text is rendered as markup.** The syntax highlighter is the highest-value target
   in the codebase and has needed fixing before. Treat any escaping change there as
   security-relevant.
@@ -152,5 +169,7 @@ unauthenticated database on your network, and the fault is not in the code.
   one should follow.
 - **No secrets management, because there are no secrets.** The application stores none, reads no
   credentials and holds no connection to Microsoft. The sensitive asset is the query store itself
-  — your detection logic, which tells a reader precisely what you do and do not detect. Treat
-  backups and exports accordingly.
+  — your detection logic, which tells a reader precisely what you do and do not detect. Schema v4
+  sharpened that: an ATT&CK Navigator layer exported from the store is a map of your coverage *and*
+  its gaps on one page, and the `falsePositives` and `tuningNotes` fields describe what you have
+  chosen to exclude. Treat backups and exports as sensitive documents, not as data dumps.

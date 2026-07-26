@@ -12,11 +12,13 @@
 # api-backup-cronjob.yaml), so the provisioner places this volume on that same node.
 # Both copies then share one disk and one machine.
 #
-# To close that gap the backups must leave the node. The cheapest option that changes
-# nothing here: have something outside the cluster pull the directory on a schedule,
-# e.g. `kubectl -n kqlstore cp <pod>:/backup ./kqlstore-backups`, or point restic/rclone
-# at off-box storage. Until that exists, treat this as protection against mistakes,
-# not against hardware.
+# That gap is closed by api-backup-offsite-cronjob.yaml, which reads the newest file
+# written here and pushes it to an S3-compatible endpoint half an hour later. This
+# volume is therefore the fast, local restore source — reach for it first, it needs no
+# network and no credentials — and the bucket is the one that survives the hardware.
+# The off-node job ships unconfigured on purpose and fails until an operator fills in
+# k8s/api-backup-offsite-config.yaml; until that is done, this claim is still protection
+# against mistakes only, not against hardware.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

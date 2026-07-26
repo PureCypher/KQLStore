@@ -11,6 +11,48 @@ import { migrateData } from '../domain/migrate.js';
 const API_BASE = '/api';
 const API_RETRY_INTERVAL_MS = 30000;
 
+// A server message is written for a human and is short. Anything longer than this is not
+// a message, it is a page — an nginx or Cloudflare Access error document — and pasting it
+// into a toast helps nobody.
+const ERROR_DETAIL_MAX = 300;
+
+/**
+ * Build the Error for a non-2xx response, carrying the server's own explanation.
+ *
+ * The status line alone is useless to the person who has to fix the problem: every
+ * rejection from the API's validation layer arrived as "API 400: Bad Request" when the
+ * body already said exactly which field was wrong ("\"tags\" exceeds 20 entries"). The
+ * body is read once, here, so every call site gets the same treatment.
+ *
+ * Reading is deliberately total — a body that is missing, truncated, not JSON, or an HTML
+ * error page from a proxy in front of the API must still produce the status-line Error
+ * rather than replacing a 500 with a parse failure from this function.
+ */
+async function apiError(res) {
+  const statusLine = `API ${res.status}${res.statusText ? `: ${res.statusText}` : ''}`;
+  let detail = '';
+  try {
+    const raw = await res.text();
+    const parsed = safeJsonParse(raw);
+    if (parsed.ok && parsed.data && !Array.isArray(parsed.data)) {
+      const body = parsed.data;
+      const message = typeof body.error === 'string' ? body.error
+        : typeof body.message === 'string' ? body.message : '';
+      detail = message.slice(0, ERROR_DETAIL_MAX);
+    } else if (raw && !raw.includes('<')) {
+      // A plain-text body from something other than our own error handler. Markup is
+      // excluded rather than stripped: an error page has no message worth extracting.
+      detail = raw.trim().slice(0, ERROR_DETAIL_MAX);
+    }
+  } catch {
+    // Body unreadable (aborted or already consumed) — the status line still stands.
+  }
+  const err = new Error(detail ? `${statusLine} — ${detail}` : statusLine);
+  err.status = res.status;
+  err.detail = detail;
+  return err;
+}
+
 const StorageAdapter = {
   // ---- API methods (source of truth) ----
 
@@ -18,7 +60,7 @@ const StorageAdapter = {
     const start = Date.now();
     try {
       const res = await fetch(`${API_BASE}/queries`, { credentials: 'include' });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
       operationLog.add({ type: 'API_FETCH_ALL', key: 'queries', success: true, latencyMs: Date.now() - start });
       return data;
@@ -37,7 +79,7 @@ const StorageAdapter = {
         body: JSON.stringify(query),
         credentials: 'include',
       });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
       operationLog.add({ type: 'API_CREATE', key: query.id, success: true, latencyMs: Date.now() - start });
       return data;
@@ -56,7 +98,7 @@ const StorageAdapter = {
         body: JSON.stringify(query),
         credentials: 'include',
       });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
       operationLog.add({ type: 'API_UPDATE', key: id, success: true, latencyMs: Date.now() - start });
       return data;
@@ -70,7 +112,7 @@ const StorageAdapter = {
     const start = Date.now();
     try {
       const res = await fetch(`${API_BASE}/queries/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       operationLog.add({ type: 'API_DELETE', key: id, success: true, latencyMs: Date.now() - start });
     } catch (e) {
       operationLog.add({ type: 'API_DELETE', key: id, success: false, latencyMs: Date.now() - start, error: e.message });
@@ -78,21 +120,34 @@ const StorageAdapter = {
     }
   },
 
-  async importQueries(queries) {
+  /**
+   * Bulk import. `options.mode` selects the server's merge semantics:
+   *
+   *   'insert' (default) — an id that already exists is left alone.
+   *   'upsert'           — an id that already exists is overwritten, but only when the
+   *                        incoming row is strictly newer than the stored one.
+   *
+   * Anything that is not exactly 'upsert' collapses to 'insert'. Overwriting is the
+   * destructive direction, so it has to be asked for by name; a caller that forwards a
+   * click event or a stale object where options were expected gets the safe mode, not a
+   * bulk overwrite.
+   */
+  async importQueries(queries, options) {
     const start = Date.now();
+    const mode = options && options.mode === 'upsert' ? 'upsert' : 'insert';
     try {
       const res = await fetch(`${API_BASE}/queries/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries }),
+        body: JSON.stringify({ queries, mode }),
         credentials: 'include',
       });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
-      operationLog.add({ type: 'API_IMPORT', key: 'bulk', success: true, latencyMs: Date.now() - start });
+      operationLog.add({ type: 'API_IMPORT', key: mode, success: true, latencyMs: Date.now() - start });
       return data;
     } catch (e) {
-      operationLog.add({ type: 'API_IMPORT', key: 'bulk', success: false, latencyMs: Date.now() - start, error: e.message });
+      operationLog.add({ type: 'API_IMPORT', key: mode, success: false, latencyMs: Date.now() - start, error: e.message });
       throw e;
     }
   },
@@ -101,7 +156,7 @@ const StorageAdapter = {
     const start = Date.now();
     try {
       const res = await fetch(`${API_BASE}/queries/export`, { credentials: 'include' });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
       operationLog.add({ type: 'API_EXPORT', key: 'bulk', success: true, latencyMs: Date.now() - start });
       return data;
@@ -115,7 +170,7 @@ const StorageAdapter = {
     const start = Date.now();
     try {
       const res = await fetch(`${API_BASE}/health`, { credentials: 'include' });
-      if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+      if (!res.ok) throw await apiError(res);
       const data = await res.json();
       operationLog.add({ type: 'API_HEALTH', key: 'health', success: true, latencyMs: Date.now() - start });
       return data;

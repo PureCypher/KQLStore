@@ -22,10 +22,19 @@ resources:
   # Frontend
   - deployment.yaml
   - service.yaml
-  # Everything else: network rules and the nightly backup (which carries its own
-  # deny-all NetworkPolicy alongside the CronJob).
+  # Everything else: network rules and the nightly backups. Each CronJob carries its own
+  # NetworkPolicy alongside it — deny-all for the local job, egress-to-the-endpoint for
+  # the off-node one.
+  #
+  # The off-node job's ConfigMap ships with REPLACE-ME values and the job refuses to run
+  # until they are filled in, so a fresh `apply -k` produces a loudly failing backup Job
+  # rather than a quietly absent one. Its credentials are deliberately NOT here: see
+  # docs/maintenance/offsite-backup-secret.example.yaml for why applying this repo must
+  # never be able to overwrite them.
   - api-networkpolicy.yaml
   - api-backup-cronjob.yaml
+  - api-backup-offsite-config.yaml
+  - api-backup-offsite-cronjob.yaml
 
 # Applied on top of the labels each manifest already declares. commonLabels also injects
 # into selectors, which would rewrite the immutable spec.selector of the existing

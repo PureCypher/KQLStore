@@ -179,14 +179,33 @@ export default function App() {
     e.target.value = '';
   }, [queries, addToast]);
 
-  const confirmImport = useCallback(async () => {
+  // `options` carries the mode the preview chose. It must be forwarded: without it the
+  // "update existing" button silently performs an insert-only import, which is safe but
+  // does nothing — a promise the UI should not make. Anything that is not exactly
+  // { mode: 'upsert' } is treated as an insert by importQueries, so a forwarded click
+  // event cannot turn into a bulk overwrite.
+  const confirmImport = useCallback(async (options) => {
     if (!importPreview) return;
     try {
-      const report = await storage.importQueries(importPreview.text);
-      if (report.errors > 0 && report.added === 0) {
+      const report = await storage.importQueries(importPreview.text, options);
+
+      // A request the server refused outright, or per-row rejections it returned with a
+      // 200. Both used to be discarded, so a rejected import looked like an empty one.
+      if (report.apiError) {
+        addToast(`Import failed: ${report.apiError}`, 'error');
+      } else if (report.errors > 0 && report.added === 0 && !report.updated) {
         addToast(`Import failed: ${report.details.map(d => d.error || d.reason).filter(Boolean).join('; ')}`, 'error');
       } else {
-        addToast(`Imported ${report.added} new, ${report.skipped} skipped, ${report.duplicateBody} duplicate bodies, ${report.errors} errors`, report.added > 0 ? 'success' : 'info');
+        const parts = [`${report.added} new`];
+        if (report.updated) parts.push(`${report.updated} updated`);
+        if (report.skipped) parts.push(`${report.skipped} skipped`);
+        if (report.duplicateBody) parts.push(`${report.duplicateBody} duplicate bodies`);
+        if (report.errors) parts.push(`${report.errors} errors`);
+        const changed = report.added > 0 || report.updated > 0;
+        addToast(`Imported ${parts.join(', ')}`, changed ? 'success' : 'info');
+      }
+      if (report.apiRejected?.length) {
+        addToast(`${report.apiRejected.length} row(s) rejected by the server`, 'error');
       }
     } catch {
       addToast('Failed to import -- unexpected error', 'error');

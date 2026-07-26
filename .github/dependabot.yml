@@ -45,9 +45,12 @@ updates:
         update-types: ['version-update:semver-major']
 
   # -------------------------------------------------------------------------
-  # API. better-sqlite3 is deliberately excluded from grouping: it is a native
-  # module whose prebuild availability is tied to the Node major in api/Dockerfile,
-  # so a bump there needs looking at rather than merging with the batch.
+  # API. better-sqlite3 is deliberately excluded from grouping: it is a native module,
+  # so a bump changes which binary ends up in the image and whether it loads at all.
+  # Under 11.x that was tied to the Node major in api/Dockerfile; under 13.x the N-API
+  # prebuild is ABI-independent, but the install path still depends on what the package
+  # declares — 11.x/12.x need their install script to run, 13.x must not run one. A bump
+  # here needs reading rather than merging with the batch.
   # -------------------------------------------------------------------------
   - package-ecosystem: npm
     directory: /api
@@ -92,10 +95,12 @@ updates:
   #
   #   1. Track the Active LTS line, not Current. Node 26 was offered the day this
   #      ecosystem was added; it does not become LTS until 2026-10-28.
-  #   2. Check better-sqlite3 first. It is a native addon and the API pins 11.x, which
-  #      does not compile against Node 26's V8 headers at all (GetPrototype,
-  #      Context::GetIsolate and PropertyCallbackInfo::This were removed). The bump to
-  #      Node 26 failed its Docker build for exactly this reason.
+  #   2. Check better-sqlite3 first. It is a native addon, and under 11.x it decided the
+  #      question outright — 11.x does not compile against Node 26's V8 headers at all
+  #      (GetPrototype, Context::GetIsolate and PropertyCallbackInfo::This were removed),
+  #      which is why the bump to Node 26 failed its Docker build. On 13.x that constraint
+  #      is gone: its N-API prebuild is ABI-independent and runs on 26 today. Re-check
+  #      rather than assume, because a downgrade would bring the constraint back.
   #
   # A bump also has to move `engines` in api/package.json and NODE_VERSION in
   # .github/workflows/ci.yml, or the manifest and CI contradict the image.

@@ -136,9 +136,14 @@ unauthenticated database on your network, and the fault is not in the code.
 - Dependencies install from committed lockfiles. The frontend build uses `npm ci --ignore-scripts`
   — the largest install-time execution surface in a tree that contains a bundler and a CSS
   compiler, both of which write the JavaScript later served from a trusted origin. The API image
-  runs a strict `npm ci --omit=dev` in a builder stage: it cannot use `--ignore-scripts` because
-  better-sqlite3 11.x and 12.x fetch their prebuilt binary from an install script, so that script
-  is trusted by necessity. It no longer falls back to `npm install` — the previous form swallowed
+  now does the same: `npm ci --omit=dev --ignore-scripts` in a builder stage. That became possible
+  with better-sqlite3 13.x, which ships ABI-independent N-API prebuilds and declares no install
+  script — 11.x and 12.x fetched their binary from one, so it had to be trusted by necessity. No
+  package in the API tree now executes code at install time, and the deps stage carries no
+  compiler or interpreter beyond Node itself. Because nothing would compile a fallback, the build
+  asserts that the native binding actually loads before the image is assembled, so a missing or
+  wrong-architecture prebuild fails the build rather than the running container. It no longer
+  falls back to `npm install` — the previous form swallowed
   the error and resolved versions afresh, which silently produced a different dependency tree than
   the lockfile describes. Treat a lockfile change in a pull request as a supply-chain change.
 - GitHub Actions are pinned to full commit SHAs; the workflow's default token is read-only.
@@ -165,11 +170,6 @@ unauthenticated database on your network, and the fault is not in the code.
   the operator — see the README.
 - **`style-src 'unsafe-inline'`.** Required by React's `style` prop, which produces inline style
   attributes. Removing it means moving every dynamic colour into a class.
-- **The API's install scripts are trusted.** better-sqlite3 11.x and 12.x download their prebuilt
-  binary from a package install script, so the API image cannot use `--ignore-scripts` the way the
-  frontend does. Moving to better-sqlite3 13.x would remove this: it ships its binaries inside the
-  package and needs no install script. Until then, a compromised release of that package executes
-  at image build time.
 - **Base image digests are pinned but not automatically updated.** A pinned digest never picks up a
   security patch on its own. Dependabot is configured to rewrite them, but a rebuild is still
   required for the fix to reach a running pod.

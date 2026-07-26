@@ -36,23 +36,18 @@ curl -s http://localhost:3000/api/queries | head -c 400
 ```
 
 To run the API on the host rather than in a container — faster restarts, real stack traces —
-note how `better-sqlite3` 11.x obtains its binary, because it decides what your host needs:
+**use `--ignore-scripts`**. Without it, a plain `npm ci` fails on any host that has no `python3`, with a wall of
+`gyp ERR! find Python`. That looks like a Node version problem and is not one — it happens on
+Node 24 and Node 26 alike. `better-sqlite3` 13.x ships an ABI-independent N-API prebuild that
+needs no build at all, but it still carries a `binding.gyp`, so npm runs its implicit
+`node-gyp rebuild` unless told not to. The flag skips a build that was never needed; the
+prebuilt binary loads exactly the same. This is what `api/Dockerfile` does, for the same reason.
 
-- **Node 18, 20, 22** — a prebuilt binary is downloaded. Nothing is compiled and no toolchain
-  is needed.
-- **Node 24, 25** — no prebuild exists for these ABIs, so `npm ci` compiles the addon from
-  source. That works, but only if the host has `python3` and a C++ compiler. Without them it
-  stops at `gyp ERR! find Python`, which reads like a version problem and is not one — the
-  same Node succeeds once the toolchain is installed.
-- **Node 26** — does not build at all, with or without a toolchain. 11.x calls
-  `v8::Object::GetPrototype`, `v8::Context::GetIsolate` and `PropertyCallbackInfo::This`, all
-  removed in Node 26. `engines` excludes it for this reason.
-
-Any Node from 20 up to and including 24 is fine — 24 is what the image ships:
+Any Node from 20 up to and including 24 works — 24 is what the image ships:
 
 ```bash
 cd api
-npm ci
+npm ci --ignore-scripts
 DB_PATH=./dev.db PORT=3000 npm run dev     # node --watch server.js
 ```
 
@@ -78,17 +73,16 @@ The suite grows with every feature, so no count is quoted here — `npm test` pr
 is enforced for `src/domain` and `src/lib` only: those modules are pure, they carry the logic that
 has actually broken in this repository, and UI coverage is a separate problem.
 
-**API** — Node's built-in test runner, no extra dependencies, from inside `api/`. `better-sqlite3`
-11.x publishes prebuilds only up to the Node 22 ABI; on Node 24 it compiles from source instead,
-which is why the container below installs a toolchain. If your host Node is outside the supported
-range, run the suite in a container, which is what CI effectively does:
+**API** — Node's built-in test runner, no extra dependencies, from inside `api/`. If your host Node
+is outside the supported range, run the suite in a container, which is what CI effectively does.
+No toolchain is installed, because none is needed:
 
 ```bash
 # Mount the repository root, not api/ — test/schema-version.test.js reads src/constants.js
 # from the root to prove the API and the SPA agree on the schema version. Mounting only
 # api/ makes that one test fail with ENOENT.
 docker run --rm -v "$PWD":/repo -w /repo/api node:24-alpine sh -c \
-  'apk add --no-cache python3 make g++ >/dev/null 2>&1; npm ci --silent; node --test "test/**/*.test.js"'
+  'npm ci --silent --ignore-scripts; node --test "test/**/*.test.js"'
 # ...
 # # tests 49
 # # pass 49
@@ -99,7 +93,7 @@ On a host already running Node 20–24, the same thing without the container:
 
 ```bash
 cd api
-npm ci
+npm ci --ignore-scripts
 node --test "test/**/*.test.js"     # 49 tests across 7 files
 ```
 

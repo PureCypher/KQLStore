@@ -1,7 +1,6 @@
-# Build output — KQLStore.js / KQLStoreTests.js are produced by Babel at image
-# build time (see Dockerfile) and must never be committed.
-KQLStore.js
-KQLStoreTests.js
+# Build output — dist/ is produced by esbuild + the Tailwind CLI at image build
+# time (see Dockerfile) and must never be committed.
+dist/
 
 # Dependencies
 node_modules/

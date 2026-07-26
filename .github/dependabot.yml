@@ -31,6 +31,18 @@ updates:
       frontend-patches:
         patterns: ['*']
         update-types: ['patch']
+      # react and react-dom MUST move together — react-dom validates that it is paired
+      # with a matching react major and the app breaks at runtime otherwise. Dependabot
+      # bumped react-dom to 19 on its own once and left react at 18; grouping them means
+      # any future major arrives as a single reviewable PR.
+      react:
+        patterns: ['react', 'react-dom']
+    ignore:
+      # eslint-plugin-react 7.37.5 declares `peer eslint "^3 || ... || ^9.7"`, so eslint 10
+      # makes `npm ci` unresolvable and the frontend image cannot build. Re-evaluate when
+      # the plugin publishes a release that accepts eslint 10, then drop this entry.
+      - dependency-name: eslint
+        update-types: ['version-update:semver-major']
 
   # -------------------------------------------------------------------------
   # API. better-sqlite3 is deliberately excluded from grouping: it is a native

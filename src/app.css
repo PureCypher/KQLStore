@@ -2,6 +2,52 @@
    cdn.tailwindcss.com at runtime. The CDN build shipped a JIT compiler to every
    client, required an outbound call on every page load (unusable in an air-gapped
    SOC, and a usage beacon to a third party), and forced 'unsafe-inline' in any CSP. */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+
+/* Tailwind 4 replaces the three @tailwind directives with one import, and moves
+   configuration out of tailwind.config.js and into this file. There is nothing to move
+   here — the old config customised no theme and loaded no plugins; it only listed the
+   content globs, which are the @source lines below. The file is therefore deleted rather
+   than kept alive through the v3 @config compatibility shim. */
+@import 'tailwindcss' source(none);
+
+/* source(none) turns OFF v4's automatic content detection, and the globs below then
+   reproduce the v3 `content` array exactly. Left on, v4 would crawl the whole project
+   and decide for itself what to scan — a wider and less predictable input than the
+   build had before, which is not a change worth making silently as part of a
+   dependency upgrade.
+   Paths are relative to THIS file, not the project root, which is the one thing easy
+   to get wrong here: the old globs were rooted at the project.
+
+   As before: every file that can contain a class name must be covered. All class names
+   in this project are written as literals (the two template-literal classNames still
+   interpolate whole literal strings), so no safelist is required — but check that if
+   you add computed classes. */
+@source '../index.html';
+@source './**/*.{js,jsx}';
+
+/* Two v4 defaults change how this app renders, and both are pinned back rather than
+   accepted, so that upgrading Tailwind is not also a silent design change. Measured by
+   diffing getComputedStyle between a v3 and a v4 build of the same page.
+
+   1. Body font. v3's Preflight set the sans stack directly; v4 sets
+      `var(--default-font-family, …)` with a different fallback list, so leaving it unset
+      quietly swapped `ui-sans-serif, system-ui` for an `-apple-system` list. The two
+      resolve to the same physical face on most machines, which is exactly why it would
+      have gone unnoticed until one where they do not. */
+@theme {
+  --default-font-family:
+    ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+}
+
+/* 2. Placeholder colour. v3 used gray-400; v4 uses the element's own colour at 50%
+      opacity. Against this dark UI that computes to roughly #7f808c against #1a1a2e —
+      about 4.2:1, down from about 6.1:1, i.e. it drops under WCAG AA for body text
+      while looking almost identical. The axe tests cannot catch this: they run in jsdom,
+      which applies no stylesheet, so nothing in CI measures contrast. Pinned to the v3
+      colour. */
+@layer base {
+  ::placeholder {
+    color: var(--color-gray-400);
+  }
+}

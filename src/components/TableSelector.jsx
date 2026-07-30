@@ -188,7 +188,7 @@ function TableSelector({ value, onChange, labelId }) {
               aria-label="Search tables"
               aria-controls={listboxId}
               aria-activedescendant={activeId}
-              className={`w-full px-2 py-1.5 rounded text-xs font-mono outline-none ${FOCUS_RING}`}
+              className={`w-full px-2 py-1.5 rounded text-xs font-mono outline-hidden ${FOCUS_RING}`}
               style={{ background: '#12121a', border: '1px solid #2a2a3e', color: '#e0e0e0' }}
               autoFocus />
           </div>

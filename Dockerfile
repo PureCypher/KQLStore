@@ -13,7 +13,10 @@ WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 
-COPY tailwind.config.js ./
+# No tailwind.config.js to copy any more: Tailwind 4 is configured from src/app.css, and
+# the content globs it used to hold are @source lines in that file. index.html is copied
+# before the build because it is one of those globs — miss it and the classes used only
+# there are silently absent from the stylesheet rather than failing the build.
 COPY index.html ./
 COPY src ./src
 RUN npm run build

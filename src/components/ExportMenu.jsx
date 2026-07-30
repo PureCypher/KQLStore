@@ -120,7 +120,7 @@ function ExportMenu({ queries, onToast }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Export queries"
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
         style={{ border: '1px solid #2a2a3e', color: '#aaa' }}
       >
         <Download size={14} aria-hidden="true" />
@@ -144,7 +144,7 @@ function ExportMenu({ queries, onToast }) {
               ref={(el) => { itemRefs.current[i] = el; }}
               tabIndex={i === activeIndex ? 0 : -1}
               onClick={() => { setOpen(false); f.run(); buttonRef.current?.focus(); }}
-              className="w-full text-left px-3 py-2 hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+              className="w-full text-left px-3 py-2 hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
             >
               <div className="text-xs" style={{ color: '#e0e0e0' }}>{f.label}</div>
               <div className="text-[11px] text-gray-400 mt-0.5">{f.hint}</div>
@@ -176,7 +176,7 @@ function ExportMenu({ queries, onToast }) {
           <button
             type="button"
             onClick={() => setWarnings(null)}
-            className="mt-3 px-2 py-1 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+            className="mt-3 px-2 py-1 rounded text-xs focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
             style={{ border: '1px solid #2a2a3e', color: '#aaa' }}
           >
             Dismiss

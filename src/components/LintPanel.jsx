@@ -58,7 +58,7 @@ function LintPanel({ query, onJumpToLine }) {
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         aria-expanded={!collapsed}
-        className="w-full flex items-center justify-between px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff] rounded-lg"
+        className="w-full flex items-center justify-between px-3 py-2 text-xs focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff] rounded-lg"
       >
         <span className="flex items-center gap-2" style={{ color: '#9ca3af' }}>
           <AlertTriangle size={12} aria-hidden="true" style={{ color: counts.error ? '#ff6b6b' : '#ffcc00' }} />
@@ -83,7 +83,7 @@ function LintPanel({ query, onJumpToLine }) {
                         <button
                           type="button"
                           onClick={() => onJumpToLine(f.line)}
-                          className="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff] rounded"
+                          className="underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff] rounded"
                           style={{ color: '#00d4ff' }}
                         >
                           line {f.line}

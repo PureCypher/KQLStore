@@ -14,10 +14,10 @@ import {
  * would make the tool worse at the thing it is already good at.
  */
 
-const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]';
+const FOCUS = 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]';
 const labelCls = 'text-xs text-gray-400 mb-1 block';
 const inputSty = { background: '#1a1a2e', border: '1px solid #2a2a3e' };
-const inputCls = `w-full px-3 py-2 rounded-lg font-mono text-sm text-gray-200 outline-none ${FOCUS}`;
+const inputCls = `w-full px-3 py-2 rounded-lg font-mono text-sm text-gray-200 outline-hidden ${FOCUS}`;
 
 /** A row of mutually exclusive choices, rendered as a radio group so it announces correctly. */
 function ChoiceRow({ legend, options, value, onChange, allowNone = true }) {

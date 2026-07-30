@@ -23,7 +23,7 @@ const SidebarContent = () => {
     <div className="relative">
       <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true" />
       <input ref={searchRef} type="text" placeholder="Search queries..." aria-label="Search queries"
-        className={`w-full pl-9 pr-8 py-2 rounded-lg text-sm text-gray-200 outline-none focus:ring-1 focus:ring-[#00ff88] ${FOCUS_RING}`}
+        className={`w-full pl-9 pr-8 py-2 rounded-lg text-sm text-gray-200 outline-hidden focus:ring-1 focus:ring-[#00ff88] ${FOCUS_RING}`}
         style={{ background: '#1a1a2e', border: '1px solid #2a2a3e' }}
         value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
       {searchTerm && <button onClick={() => setSearchTerm('')} aria-label="Clear search" title="Clear search"

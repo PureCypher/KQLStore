@@ -110,7 +110,7 @@ const QueryEditorModal = () => {
   };
 
   const isModified = editingQuery.query && form.query !== editingQuery.query;
-  const inputCls = `w-full px-3 py-2 rounded-lg font-mono text-sm text-gray-200 outline-none focus:ring-1 focus:ring-[#00ff88] ${FOCUS_RING}`;
+  const inputCls = `w-full px-3 py-2 rounded-lg font-mono text-sm text-gray-200 outline-hidden focus:ring-1 focus:ring-[#00ff88] ${FOCUS_RING}`;
   const inputSty = { background: '#1a1a2e', border: '1px solid #2a2a3e' };
   // text-gray-500 (#6b7280) is 3.85:1 on this panel's #12121a and text-gray-400 is 7.0:1;
   // WCAG 1.4.3 wants 4.5:1 of a field label. Measured with axe in Chromium.

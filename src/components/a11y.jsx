@@ -23,7 +23,7 @@
 // note in tailwind.config.js about computed class names.
 // ---------------------------------------------------------------------------
 
-const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d4ff]';
+const FOCUS_RING = 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]';
 
 // [tabindex] is matched unqualified and then filtered on the resolved tabIndex, which
 // covers tabindex="-1" without needing a second attribute selector.

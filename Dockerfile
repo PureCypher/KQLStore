@@ -3,7 +3,7 @@
 # Base images are pinned by digest, not by tag. A floating tag means two builds of the same
 # commit can produce different bytes, so "rebuild and compare" stops being a usable incident
 # response step. Update these deliberately.
-FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS build
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS build
 WORKDIR /build
 
 # Dependencies come from the committed lockfile via `npm ci`, never a bare `npm install`

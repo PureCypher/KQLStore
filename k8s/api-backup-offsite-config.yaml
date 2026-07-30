@@ -39,12 +39,27 @@ data:
   # store today — losing the node the PVC is pinned to. A NAS in the same house survives
   # more. A cloud bucket survives the house. Pick the tier you will actually maintain,
   # then write down which failures it does not cover.
-  OFFSITE_ENDPOINT: "REPLACE-ME"
+  #
+  # This deployment uses the in-cluster MinIO. It clears the off-node bar and nothing
+  # more: MinIO runs on node4 while the API's PVC is pinned to node3, so this copy
+  # survives losing node3 — the failure that destroys the store today. Write down what it
+  # does NOT cover, per the paragraph above:
+  #   - losing node4 (MinIO's own data is a single local-path PVC on that node)
+  #   - losing or rebuilding this cluster
+  #   - losing the building
+  # Moving to a cloud bucket later is a change to this file and a new Secret; nothing in
+  # the CronJob or the application has to change.
+  OFFSITE_ENDPOINT: "http://minio.browserphish.svc.cluster.local:9000"
 
   # Bucket must already exist. The job does not create it: creating buckets needs a
   # credential far broader than "write objects into this one prefix", and a typo in the
   # bucket name would silently start a second, invisible backup lineage.
-  OFFSITE_BUCKET: "REPLACE-ME"
+  #
+  # Created on the in-cluster MinIO alongside a `kqlstore-backup` policy scoped to
+  # PutObject/GetObject/DeleteObject on kqlstore-backups/kqlstore/* plus ListBucket on the
+  # bucket, attached to a dedicated `kqlstorebackup` user. The job's credential is that
+  # user, never MinIO's root.
+  OFFSITE_BUCKET: "kqlstore-backups"
 
   # Key prefix inside the bucket. Safe to share a bucket with other backups; retention
   # below only ever looks at kqlstore-*.db under this exact prefix.
@@ -56,7 +71,10 @@ data:
   #   AWS | Minio | Ceph | Cloudflare | Wasabi | Storj | Other
   # Notably "AWS" turns OFF path-style addressing (bucket in the hostname); "Other"
   # leaves it on, which is what nearly every self-hosted gateway needs.
-  OFFSITE_PROVIDER: "Other"
+  #
+  # "Minio" rather than "Other" because the destination really is MinIO and rclone knows
+  # the dialect. Both keep path-style addressing on, which this endpoint needs.
+  OFFSITE_PROVIDER: "Minio"
 
   # Region. MinIO ignores it, B2 and AWS require the real one, R2 wants "auto".
   OFFSITE_REGION: "us-east-1"

@@ -139,6 +139,14 @@ the image references to your own registry before applying** — in `k8s/deployme
 `k8s/api-deployment.yaml` and `k8s/api-backup-cronjob.yaml`, which deliberately runs the same
 image as the API.
 
+`k8s/api-backup-offsite-config.yaml` is the same kind of file: `OFFSITE_ENDPOINT` and
+`OFFSITE_BUCKET` name the maintainer's own storage, so **change them before applying** and create
+the credential Secret, which is deliberately not in this repository. See
+[docs/maintenance/offsite-backup.md](docs/maintenance/offsite-backup.md). Applied unchanged it
+does not quietly do nothing — the job cannot reach an endpoint that is not on your network, so the
+Job goes red — but it fails with a connection error rather than the preflight naming the value you
+did not set.
+
 ```bash
 docker build -t <your-registry>/kqlstore:latest .
 docker build -t <your-registry>/kqlstore-api:latest ./api
@@ -292,9 +300,17 @@ kubectl -n kqlstore logs job/backup-now
 
 **Those backups do not leave the node.** `local-path` is node-local storage and the CronJob is
 pinned to the API's node, so both copies share one disk and one machine. It protects you against
-a mistake, not against hardware. Pull them somewhere else on a schedule, using the maintenance pod
-in `docs/maintenance/` — the API pod does not mount the backup claim, and the CronJob's own pods
-exit too quickly to copy from:
+a mistake, not against hardware.
+
+`k8s/api-backup-offsite-cronjob.yaml` closes that gap: at 03:47 it takes whatever the local job
+last wrote, refuses it if it is older than 26 hours, and pushes it to an S3-compatible endpoint —
+then, with `OFFSITE_VERIFY_ROUNDTRIP` left on as it ships, reads the object back and proves the
+copy restores to a working database before reporting success. It
+ships pointed at the maintainer's storage and must be repointed at yours — see
+[docs/maintenance/offsite-backup.md](docs/maintenance/offsite-backup.md).
+
+To pull copies by hand as well, or instead, use the maintenance pod in `docs/maintenance/` — the
+API pod does not mount the backup claim, and the CronJob's own pods exit too quickly to copy from:
 
 ```bash
 kubectl apply -f docs/maintenance/backup-shell.yaml

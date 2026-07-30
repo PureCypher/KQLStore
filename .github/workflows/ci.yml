@@ -7,7 +7,7 @@
 # comment beside each SHA records which release it is so Dependabot can bump both
 # together — see .github/dependabot.yml.
 #
-# Nothing here publishes an image. The registry (192.168.1.76:5001) is on the
+# Nothing here publishes an image. The registry (192.168.1.100:5000) is on the
 # maintainer's LAN and is not reachable from GitHub-hosted runners, so `build` proves
 # the Dockerfiles still build and stops there.
 # ---------------------------------------------------------------------------

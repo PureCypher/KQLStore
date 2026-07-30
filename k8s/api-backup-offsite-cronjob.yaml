@@ -122,7 +122,7 @@ spec:
             # nothing at all, with a message that names the missing keys.
             # -----------------------------------------------------------------
             - name: stage
-              image: 192.168.1.76:5001/kqlstore-api:latest
+              image: 192.168.1.100:5000/kqlstore-api:latest
               imagePullPolicy: Always
               # As in api-backup-cronjob.yaml: `node -e` resolves require() from the
               # working directory, and /app is where the API image keeps node_modules.
@@ -524,7 +524,7 @@ spec:
             # exercised within the last 24 hours, every time.
             # -----------------------------------------------------------------
             - name: verify-restore
-              image: 192.168.1.76:5001/kqlstore-api:latest
+              image: 192.168.1.100:5000/kqlstore-api:latest
               imagePullPolicy: Always
               workingDir: /app
               envFrom:

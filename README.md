@@ -134,7 +134,7 @@ each carries the `falsePositives` and `tuningNotes` that say what to baseline. T
 
 ## Deploy to Kubernetes
 
-The manifests reference `192.168.1.76:5001`, a registry on the maintainer's own network. **Change
+The manifests reference `192.168.1.100:5000`, a registry on the maintainer's own network. **Change
 the image references to your own registry before applying** — in `k8s/deployment.yaml`,
 `k8s/api-deployment.yaml` and `k8s/api-backup-cronjob.yaml`, which deliberately runs the same
 image as the API.

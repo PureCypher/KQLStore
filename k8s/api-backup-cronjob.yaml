@@ -89,7 +89,7 @@ spec:
               # Deliberately the same image as the API: it is the only image known to
               # carry a better-sqlite3 build matching this database, and pinning a
               # second image would let the two drift apart.
-              image: 192.168.1.76:5001/kqlstore-api:latest
+              image: 192.168.1.100:5000/kqlstore-api:latest
               imagePullPolicy: Always
               # See note (3) above — this is what makes require('better-sqlite3') resolve.
               workingDir: /app

@@ -71,7 +71,7 @@ body:
     attributes:
       label: Version
       description: Commit SHA or image tag you are running.
-      placeholder: e.g. e0670a3, or 192.168.1.76:5001/kqlstore:latest pulled on 2026-07-20
+      placeholder: e.g. e0670a3, or 192.168.1.100:5000/kqlstore:latest pulled on 2026-07-20
 
   - type: input
     id: browser

@@ -74,6 +74,50 @@ jobs:
         run: node_modules/.bin/eslint .
 
   # -------------------------------------------------------------------------
+  # Frontend unit tests.
+  #
+  # These existed long before this job did: 400 tests across 16 files that only ran
+  # when somebody remembered to run them, which is not a gate. Two dependency majors
+  # merged on a green CI that never executed one of them — vitest 2 to 4 (#30) and
+  # lucide-react 0.454 to 1.27 (#24), the second of which renders into components and
+  # could only be trusted because the suite was run by hand. The next one would not
+  # have been.
+  #
+  # `npm run test:coverage` rather than `npm test`, so this job enforces two things at
+  # once: the suite passes, and the coverage thresholds in vitest.config.js still hold
+  # (80% lines and functions, 75% branches, measured over src/domain and src/lib).
+  # README.md states that bar; vitest exits non-zero when it is missed, so running the
+  # plain suite would leave it as prose. Verified by raising the thresholds to 100 and
+  # confirming the run exits 1.
+  #
+  # --ignore-scripts matches Dockerfile's install for a reason beyond tidiness: if a
+  # future dependency needs an install script to be usable, the image build is where
+  # that breaks, and this job should find it first rather than pass on a tree the
+  # release build cannot reproduce.
+  # -------------------------------------------------------------------------
+  frontend-test:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # npm ci, never npm install: it fails when package.json and package-lock.json have
+      # drifted, which is worth catching on its own and is what the image build does.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+  # -------------------------------------------------------------------------
   # API unit tests. api/test/ is being added separately, so the run is guarded on
   # the directory existing — `node --test` on a missing path exits non-zero and
   # would otherwise red the branch for work that has not landed yet.

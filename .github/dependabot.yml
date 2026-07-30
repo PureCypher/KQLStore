@@ -37,6 +37,15 @@ updates:
       # any future major arrives as a single reviewable PR.
       react:
         patterns: ['react', 'react-dom']
+      # vitest and @vitest/coverage-v8 MUST move together, for the same reason and with a
+      # sharper failure. coverage-v8 declares a peer dependency on its exact matching
+      # vitest, so bumping either alone makes `npm ci` unresolvable — not a test failure
+      # but an ERESOLVE that fails every job which installs, the Docker build included.
+      # Dependabot did exactly this: #25 raised vitest and #26 raised coverage-v8, and
+      # neither could go green unless the other merged first, so both sat red. Grouped,
+      # the pair arrives as one PR that can actually pass.
+      vitest:
+        patterns: ['vitest', '@vitest/coverage-v8']
     ignore:
       # eslint-plugin-react 7.37.5 declares `peer eslint "^3 || ... || ^9.7"`, so eslint 10
       # makes `npm ci` unresolvable and the frontend image cannot build. Re-evaluate when

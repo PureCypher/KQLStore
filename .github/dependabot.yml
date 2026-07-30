@@ -52,6 +52,24 @@ updates:
       # the plugin publishes a release that accepts eslint 10, then drop this entry.
       - dependency-name: eslint
         update-types: ['version-update:semver-major']
+      # @eslint/js is the same blocker under a different name, which is why ignoring
+      # `eslint` alone was not enough: @eslint/js@10 declares `peer eslint "^10.0.0"`, so it
+      # cannot be installed beside the eslint 9 the line above pins us to — `npm install`
+      # fails outright with ERESOLVE.
+      #
+      # It was offered anyway (#22) and produced a failure that reads like a code problem
+      # rather than a dependency one: with @eslint/js 10 hoisted into the tree, the CI lint
+      # job resolves `require('@eslint/js')` to it, and its `recommended` set turns on
+      # no-useless-assignment, which then fires on src/domain/migrate.js. That finding is a
+      # false positive against a deliberate migration ladder — see the comment there before
+      # anyone "fixes" it.
+      #
+      # Both entries come out together, and only once eslint-plugin-react ships a release
+      # accepting eslint 10. As of 2026-07-30 its latest is still 7.37.5, capped at ^9.7.
+      # eslint-plugin-react-hooks already accepts ^10, so that one package is the whole
+      # blocker.
+      - dependency-name: '@eslint/js'
+        update-types: ['version-update:semver-major']
 
   # -------------------------------------------------------------------------
   # API. better-sqlite3 is deliberately excluded from grouping: it is a native module,

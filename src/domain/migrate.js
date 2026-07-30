@@ -75,6 +75,19 @@ function migrateData(data) {
       for (const id of techniques) if (!merged.includes(id)) merged.push(id);
       return { ...q, tags: remaining, attack: { ...existing, techniques: merged } };
     });
+    // DO NOT DELETE THIS ASSIGNMENT, even though nothing reads it today.
+    //
+    // Every rung of this ladder ends by advancing `version` so the next `if (version < N)`
+    // tests the data's state rather than the state it arrived in. This is the last rung, so
+    // the write is currently dead and a linter will say so: eslint's no-useless-assignment
+    // flags exactly this line. It is off under our eslint 9 config and fires under
+    // @eslint/js 10's recommended set, which is how it was found (see the ignore entry in
+    // .github/dependabot.yml).
+    //
+    // Deleting it would be silently correct until someone appends a v4 -> v5 block, at which
+    // point that block would branch on the *input* version and re-run against data this
+    // function had just migrated. Adding the next rung is the moment this line stops being
+    // dead, and the moment it is missed is the moment it costs a corrupted store.
     version = 4;
   }
 

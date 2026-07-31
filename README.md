@@ -12,7 +12,15 @@ connection to Microsoft. Beyond the 15-query [starter pack](docs/starter-pack.md
 worked examples rather than validated detections, everything in it will be something you or your
 team put there.
 
-![The KQL Store interface, showing the query list, filters and syntax-highlighted detail pane](kqlstore-v3-deployed.png)
+![The KQL Store interface: a sidebar of categories, tables and tags with per-item counts, beside a
+list of query cards. Each card shows a title, a collapsible code block and its table, category and
+last-updated badges. Query titles, descriptions and KQL bodies appear as grey placeholder bars
+because this is a live instance and its contents are redacted.](kqlstore-v4-deployed.png)
+
+*A running instance, not a mock-up — hence the 48 queries and the populated sidebar counts. The
+titles, descriptions and query bodies are redacted: this is somebody's real detection library, and
+publishing it would say as much about what it does not cover as what it does. The starter pack in
+`content/` is the content you get on a fresh install.*
 
 ## Architecture
 

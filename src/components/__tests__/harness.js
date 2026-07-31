@@ -53,6 +53,8 @@ function makeAppValue(overrides = {}) {
     setSelectedTable: noop,
     showFavoritesOnly: false,
     setShowFavoritesOnly: noop,
+    lineageFilter: null,
+    setLineageFilter: noop,
     sortBy: 'updated',
     setSortBy: noop,
     sortDir: 'desc',

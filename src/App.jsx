@@ -6,7 +6,7 @@ import { getTableDisplayName } from './domain/tables.js';
 import { validateQuery } from './domain/validate.js';
 import { migrateData } from './domain/migrate.js';
 import { simpleHash } from './domain/hash.js';
-import { makeFork, indexById, childrenOf } from './domain/lineage.js';
+import { makeFork, indexById, childrenOf, matchesLineageFilter } from './domain/lineage.js';
 import { safeJsonParse } from './lib/json.js';
 import { StorageAdapter } from './storage/adapter.js';
 import { useKQLStorage } from './storage/useKQLStorage.js';
@@ -44,6 +44,7 @@ export default function App() {
   const [tableFilterExpanded, setTableFilterExpanded] = useState({ sentinel: true, defender: true, custom: true });
   const [selectedTags, setSelectedTags] = useState([]);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [lineageFilter, setLineageFilter] = useState(null);
   const [sortBy, setSortBy] = useState('updated');
   const [sortDir, setSortDir] = useState('desc');
   const [editingQuery, setEditingQuery] = useState(null);
@@ -359,6 +360,7 @@ export default function App() {
     if (selectedTable) result = result.filter((q) => q.table === selectedTable);
     if (selectedTags.length > 0) result = result.filter((q) => selectedTags.every((t) => (q.tags || []).includes(t)));
     if (showFavoritesOnly) result = result.filter((q) => q.favorite);
+    if (lineageFilter) result = result.filter((q) => matchesLineageFilter(q, lineageFilter, lineage.forkIndex, lineage.byId));
     return [...result].sort((a, b) => {
       let cmp = 0;
       if (sortBy === 'name') cmp = a.name.localeCompare(b.name);
@@ -369,7 +371,7 @@ export default function App() {
       else if (sortBy === 'category') cmp = (a.category || '').localeCompare(b.category || '');
       return sortDir === 'desc' ? -cmp : cmp;
     });
-  }, [queries, debouncedSearch, selectedCategory, selectedTable, selectedTags, showFavoritesOnly, sortBy, sortDir]);
+  }, [queries, debouncedSearch, selectedCategory, selectedTable, selectedTags, showFavoritesOnly, lineageFilter, lineage, sortBy, sortDir]);
 
   // --- Clipboard ---
   // navigator.clipboard only exists in a secure context. Over plain HTTP on a non-localhost
@@ -422,10 +424,10 @@ export default function App() {
 
   const clearFilters = useCallback(() => {
     setSearchTerm(''); setSelectedCategory(null); setSelectedTable(null);
-    setSelectedTags([]); setShowFavoritesOnly(false);
+    setSelectedTags([]); setShowFavoritesOnly(false); setLineageFilter(null);
   }, []);
 
-  const hasActiveFilters = selectedCategory || selectedTable || selectedTags.length > 0 || showFavoritesOnly || debouncedSearch;
+  const hasActiveFilters = selectedCategory || selectedTable || selectedTags.length > 0 || showFavoritesOnly || debouncedSearch || lineageFilter;
 
   // Every value the hoisted shell components read. Memoised so the identity only changes
   // when something they actually use changes.
@@ -440,6 +442,7 @@ export default function App() {
     searchRef, searchTerm, setSearchTerm,
     selectedCategory, setSelectedCategory, selectedTable, setSelectedTable,
     showFavoritesOnly, setShowFavoritesOnly,
+    lineageFilter, setLineageFilter,
     sortBy, setSortBy, sortDir, setSortDir,
     tableFilterExpanded, setTableFilterExpanded,
     hasActiveFilters, clearFilters,
@@ -451,7 +454,7 @@ export default function App() {
     toasts, showKeyboardHelp, editingQuery, saveQuery, copyToClipboard, deleteQuery,
     duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
     queries, stats, allTags, categoryCounts, searchTerm, selectedCategory, selectedTable,
-    showFavoritesOnly, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
+    showFavoritesOnly, lineageFilter, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
     importPreview, confirmImport, handleBulkDelete, handleBulkExport, handleBulkCategory,
     handleBulkTable, savingState, expandedIds, searchRef,
   ]);

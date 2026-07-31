@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeFork, indexById, childrenOf, ancestryOf, isOrphan } from '../lineage.js';
+import { makeFork, indexById, childrenOf, ancestryOf, isOrphan, matchesLineageFilter } from '../lineage.js';
 
 const q = (id, over = {}) => ({
   id, name: `q-${id}`, query: 'SigninLogs | take 1', description: 'd',
@@ -196,5 +196,34 @@ describe('isOrphan', () => {
   it('is false for a query that was never a fork', () => {
     const all = [q('p')];
     expect(isOrphan(all[0], indexById(all))).toBe(false);
+  });
+});
+
+describe('matchesLineageFilter', () => {
+  const parent = q('p1');
+  const fork = q('f1', { parentId: 'p1' });
+  const lone = q('l1');
+  const orphan = q('o1', { parentId: 'gone' });
+  const all = [parent, fork, lone, orphan];
+  const idx = childrenOf(all);
+  const byId = indexById(all);
+
+  it('passes everything when the filter is null', () => {
+    expect(all.filter((x) => matchesLineageFilter(x, null, idx, byId))).toHaveLength(4);
+  });
+
+  it('"forks" selects queries that have a parent', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'forks', idx, byId));
+    expect(got.map((x) => x.id).sort()).toEqual(['f1', 'o1']);
+  });
+
+  it('"parents" selects queries that have at least one fork', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'parents', idx, byId));
+    expect(got.map((x) => x.id)).toEqual(['p1']);
+  });
+
+  it('"orphans" selects forks whose parent is gone', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'orphans', idx, byId));
+    expect(got.map((x) => x.id)).toEqual(['o1']);
   });
 });

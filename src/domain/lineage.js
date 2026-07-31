@@ -87,3 +87,15 @@ export function ancestryOf(query, byId, maxDepth = 50) {
 export function isOrphan(query, byId) {
   return Boolean(query.parentId) && !byId.has(query.parentId);
 }
+
+/**
+ * Predicate for the sidebar's lineage filter. `null` means no filter and passes
+ * everything, so the caller does not need a special case.
+ */
+export function matchesLineageFilter(query, filter, forkIndex, byId) {
+  if (!filter) return true;
+  if (filter === 'forks') return Boolean(query.parentId);
+  if (filter === 'parents') return (forkIndex.get(query.id) || []).length > 0;
+  if (filter === 'orphans') return isOrphan(query, byId);
+  return true;
+}

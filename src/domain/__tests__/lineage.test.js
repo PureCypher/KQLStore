@@ -153,7 +153,27 @@ describe('ancestryOf', () => {
     const cyclic = [q('x', { parentId: 'y' }), q('y', { parentId: 'x' })];
     const map = indexById(cyclic);
     const walked = ancestryOf(cyclic[0], map);
-    expect(walked.length).toBeLessThanOrEqual(2);
+    // Walking from x: seen={x}, walk to y, seen={x,y}, try x again, found in seen, stop.
+    // Expected: [y]
+    expect(walked.map((a) => a.id)).toEqual(['y']);
+  });
+
+  it('terminates on self-reference without hanging', () => {
+    const selfRef = q('a', { parentId: 'a' });
+    const map = indexById([selfRef]);
+    const walked = ancestryOf(selfRef, map);
+    // Walking from a: seen={a}, check a.parentId='a', found in seen, stop.
+    // Expected: [] (no ancestors)
+    expect(walked).toEqual([]);
+  });
+
+  it('terminates on a three-node cycle instead of hanging', () => {
+    const cyclic = [q('a', { parentId: 'b' }), q('b', { parentId: 'c' }), q('c', { parentId: 'a' })];
+    const map = indexById(cyclic);
+    const walked = ancestryOf(cyclic[0], map);
+    // Walking from a: seen={a}, walk to b, seen={a,b}, walk to c, seen={a,b,c}, try a, found in seen, stop.
+    // Expected: [b, c]
+    expect(walked.map((a) => a.id)).toEqual(['b', 'c']);
   });
 
   it('honours maxDepth on a long chain', () => {

@@ -264,14 +264,39 @@ form is already editing. Closing the panel removes a view, not a source of truth
 
 ### Redaction
 
-The scanner from the GitHub backup job runs in `kqlstore-ai` before egress, reusing its existing
-allowlist behaviour — the four AD extended-rights schema GUIDs documented in
-[`k8s/api-backup-github-config.yaml`](../../../k8s/api-backup-github-config.yaml) must **not** be
+**The scanner is not currently a module.** It is inlined in
+[`k8s/api-backup-github-cronjob.yaml`](../../../k8s/api-backup-github-cronjob.yaml) inside the
+job's `node -e` script, so it exists nowhere that another caller can import and has never been
+unit-tested. Reuse therefore begins with extracting it to `api/lib/redact.js` without changing the
+backup job's behaviour — the job's committed output must stay byte-identical, or every backed-up
+query looks modified on the next run.
+
+Its existing allowlist behaviour carries over: the four AD extended-rights schema GUIDs documented
+in [`k8s/api-backup-github-config.yaml`](../../../k8s/api-backup-github-config.yaml) must **not** be
 redacted, since doing so breaks the query while protecting nothing.
 
-Fingerprint → original mapping is held client-side for the duration of the conversation and never
-sent. Un-redaction on the return path is a text substitution over the model's response, which must
-survive the model having rewritten the surrounding KQL.
+**The two rule classes map onto two different behaviours**, and the distinction is the useful part
+of reusing this code rather than writing something new:
+
+| Class | Backup job | AI service |
+| --- | --- | --- |
+| `SECRET` — a credential | Fails, publishes nothing | **Refuses the request.** No placeholder, no override. There is no correct version of "send the credential anyway", and the operator's next move is to remove it from the query. |
+| `DISCLOSURE` — operational detail | Replaced with a marker | Replaced with a marker; the request proceeds |
+
+**Markers are typed placeholders, not HMAC fingerprints.** The backup job needs
+`REDACTED-<8 hex>` because stability across runs is what keeps an unchanged query from producing a
+changed commit. The AI service needs the opposite property: `<EMAIL_1>` and `<WATCHLIST_NAME_2>`
+tell the model what kind of thing was removed, so it keeps the value in a string comparison instead
+of mangling it, and they survive being moved around when the model rewrites the surrounding KQL.
+The marker scheme is therefore injected by the caller rather than owned by the module.
+
+One marker namespace is shared across `name`, `description` and `query` in a single request: a
+watchlist name appearing in two fields must become the same placeholder in both, or the model
+treats them as two different things and writes a query that does too.
+
+Marker → original mapping is held client-side for the conversation and never sent. Un-redaction on
+the return path is a substitution over the model's response, which must survive the model having
+rewritten the KQL around the marker.
 
 The existence of this control is not incidental. The backup job already refuses to send query text
 verbatim to a *private repository you own*, on the grounds that a scan of the maintainer's 48
@@ -375,6 +400,19 @@ nothing depends on it. Ship it doing something trivial.
 
 **6 — Provenance.** Last, once real use has shown which fields actually get accepted.
 
+### Delivery
+
+Steps 1–2 and steps 3–6 are delivered as two separate implementation plans, because the split is
+also where the risk profile changes: everything up to step 2 is application work with no
+infrastructure change and no external dependency, and everything after it needs cluster changes, a
+Secret, and a network path that cannot be fully tested from a unit suite.
+
+- [`plans/2026-07-31-fork-lineage-and-schema-store.md`](../plans/2026-07-31-fork-lineage-and-schema-store.md) — steps 1–2, 12 tasks
+- [`plans/2026-07-31-ai-assisted-authoring.md`](../plans/2026-07-31-ai-assisted-authoring.md) — steps 3–6, 10 tasks
+
+The second plan depends on the first and states so; do not begin its Task 5 without the schema
+store in place.
+
 ## Out of scope
 
 Named explicitly so they are not assumed:
@@ -396,6 +434,7 @@ Named explicitly so they are not assumed:
 | Ollama Cloud changes or withdraws capabilities | Capabilities verified 2026-07-31 and recorded above. The validation gate holds regardless. |
 | Model writes plausible but wrong KQL | Human review of every proposal; nothing auto-applied. Detection logic is never saved unreviewed. |
 | Redaction degrades output quality below usefulness | Per-request override exists. If it is used every time, that is evidence the feature needs rethinking, not that the override is working. |
-| Un-redaction fails when the model rewrites surrounding KQL | Explicit test target. Failure is visible in review, not silent. |
+| Un-redaction fails when the model rewrites surrounding KQL | Explicit test target. Typed markers rather than opaque fingerprints make this substantially less likely. Failure is visible in review, not silent. |
+| Extracting the scanner changes the backup job's output | The job's HMAC marker scheme stays with the job; only the rule tables move. Verified by comparing committed output before and after. |
 | Provenance overstates AI involvement | Records accepted fields only, not proposed. |
 | 1Gi PVC growth | Schema store is small and bounded; provenance is capped at 10 entries per query; no transcripts are stored. |

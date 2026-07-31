@@ -5,6 +5,16 @@ const { validateSchemaPayload } = require('../validate');
 const router = Router();
 
 /**
+ * Normalise the table name from a path parameter. validateSchemaPayload trims the name
+ * on write, so we must trim it consistently on read and delete too. Otherwise a client
+ * that PUT /api/schemas/%20%20Padded%20%20 gets a 200 but cannot GET or DELETE at the
+ * same URL.
+ */
+function keyFrom(raw) {
+  return String(raw ?? '').trim();
+}
+
+/**
  * Parse the columns document defensively. Same reasoning as parseTags in routes/queries.js:
  * one malformed row must not take down the list endpoint for every other table.
  */
@@ -43,7 +53,8 @@ router.get('/', (_req, res, next) => {
 
 router.get('/:name', (req, res, next) => {
   try {
-    const row = db.prepare('SELECT * FROM table_schemas WHERE name = ?').get(req.params.name);
+    const name = keyFrom(req.params.name);
+    const row = db.prepare('SELECT * FROM table_schemas WHERE name = ?').get(name);
     if (!row) throw notFound();
     res.json(toFrontend(row));
   } catch (err) {
@@ -55,7 +66,8 @@ router.get('/:name', (req, res, next) => {
 // of truth for the key is how you end up with a row nobody can address.
 router.put('/:name', (req, res, next) => {
   try {
-    const v = validateSchemaPayload({ ...req.body, name: req.params.name });
+    const name = keyFrom(req.params.name);
+    const v = validateSchemaPayload({ ...req.body, name });
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO table_schemas (name, columns, notes, source, updated)
@@ -71,9 +83,10 @@ router.put('/:name', (req, res, next) => {
 
 router.delete('/:name', (req, res, next) => {
   try {
-    const result = db.prepare('DELETE FROM table_schemas WHERE name = ?').run(req.params.name);
+    const name = keyFrom(req.params.name);
+    const result = db.prepare('DELETE FROM table_schemas WHERE name = ?').run(name);
     if (result.changes === 0) throw notFound();
-    res.json({ deleted: req.params.name });
+    res.json({ deleted: name });
   } catch (err) {
     next(err);
   }

@@ -64,15 +64,27 @@ test('rejects an invalid payload with 400 and a usable message', async () => {
   assert.match(res.body.error, /"columns" must be an array/);
 });
 
-test('a malformed columns row does not 500 the list', async () => {
+test('a malformed columns row does not 500 the list, and coexists with valid rows', async () => {
   const db = require('../db');
+  // Insert a good row
+  db.prepare(`
+    INSERT INTO table_schemas (name, columns, notes, source, updated)
+    VALUES ('GoodSchema', '[]', 'a valid row', 'manual', '2026-01-01T00:00:00Z')
+  `).run();
+  // Insert a malformed row
   db.prepare(`
     INSERT INTO table_schemas (name, columns, notes, source, updated)
     VALUES ('Broken', '{not json', '', 'manual', '2026-01-01T00:00:00Z')
   `).run();
   const res = await api(server.url, '/api/schemas');
   assert.strictEqual(res.status, 200);
+  // Verify the good row is present with intact columns
+  const good = res.body.find((s) => s.name === 'GoodSchema');
+  assert.ok(good, 'good row must be in the list');
+  assert.deepStrictEqual(good.columns, [], 'good row columns are intact');
+  // Verify the malformed row is present with degraded columns
   const broken = res.body.find((s) => s.name === 'Broken');
+  assert.ok(broken, 'malformed row must be in the list');
   assert.deepStrictEqual(broken.columns, [], 'unparseable columns degrade to empty, not a 500');
 });
 
@@ -82,4 +94,30 @@ test('a name in the path is used, not one in the body', async () => {
   assert.strictEqual(res.status, 200);
   const loser = await api(server.url, '/api/schemas/BodyLoses');
   assert.strictEqual(loser.status, 404);
+});
+
+test('a padded name in the path is trimmed consistently across PUT, GET, and DELETE', async () => {
+  const paddedPath = '/%20%20Padded%20%20';
+  // PUT with padded path
+  const put = await api(server.url, `/api/schemas${paddedPath}`, {
+    method: 'PUT',
+    body: { columns: [{ name: 'Col1', type: 'string' }] },
+  });
+  assert.strictEqual(put.status, 200, 'PUT with padded path returns 200');
+  assert.strictEqual(put.body.name, 'Padded', 'stored name is trimmed');
+  assert.deepStrictEqual(put.body.columns, [{ name: 'Col1', type: 'string' }]);
+
+  // GET with same padded path must succeed (not 404)
+  const get = await api(server.url, `/api/schemas${paddedPath}`);
+  assert.strictEqual(get.status, 200, 'GET with padded path returns 200');
+  assert.strictEqual(get.body.name, 'Padded');
+
+  // DELETE with same padded path must succeed (not 404)
+  const del = await api(server.url, `/api/schemas${paddedPath}`, { method: 'DELETE' });
+  assert.strictEqual(del.status, 200, 'DELETE with padded path returns 200');
+  assert.strictEqual(del.body.deleted, 'Padded', 'deleted name is trimmed');
+
+  // Verify it is truly gone
+  const afterDelete = await api(server.url, `/api/schemas${paddedPath}`);
+  assert.strictEqual(afterDelete.status, 404);
 });

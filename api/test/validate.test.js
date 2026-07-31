@@ -6,6 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const {
+  validateQueryPayload,
   validateSyncFields,
   validateImportMode,
   validateExpectedUpdated,
@@ -73,4 +74,77 @@ test('paging accepts integers inside the bounds and rejects the rest', () => {
   assert.throws(() => validatePagination({ offset: '-3' }), /non-negative integer/);
   // Repeated query parameters arrive as an array; it must not be coerced.
   assert.throws(() => validatePagination({ limit: ['1', '2'] }), /non-negative integer/);
+});
+
+// ---------------------------------------------------------------------------
+// Fork lineage.
+//
+// parentId is bounded by LIMITS.id because it holds the same kind of value the id column
+// does, and parentName by LIMITS.name because it is a copy of one. Neither is checked for
+// resolvability here: whether the parent still exists is a question about the store, not
+// about the payload, and the answer is allowed to be "no" (see api/db.js on why there is
+// no foreign key).
+// ---------------------------------------------------------------------------
+
+test('accepts parentId and parentName', () => {
+  const out = validateQueryPayload({
+    name: 'n', query: 'q', parentId: 'abc-123', parentName: 'Entra risky sign-in',
+  });
+  assert.strictEqual(out.parentId, 'abc-123');
+  assert.strictEqual(out.parentName, 'Entra risky sign-in');
+});
+
+test('omits lineage fields when absent', () => {
+  const out = validateQueryPayload({ name: 'n', query: 'q' });
+  assert.ok(!('parentId' in out));
+  assert.ok(!('parentName' in out));
+});
+
+test('rejects a parentId over the id limit', () => {
+  assert.throws(
+    () => validateQueryPayload({ name: 'n', query: 'q', parentId: 'x'.repeat(LIMITS.id + 1) }),
+    /"parentId" exceeds 200 characters/,
+  );
+});
+
+test('rejects a parentName over the name limit', () => {
+  assert.throws(
+    () => validateQueryPayload({ name: 'n', query: 'q', parentName: 'x'.repeat(LIMITS.name + 1) }),
+    /"parentName" exceeds 200 characters/,
+  );
+});
+
+test('rejects a non-string parentId', () => {
+  assert.throws(
+    () => validateQueryPayload({ name: 'n', query: 'q', parentId: 42 }),
+    /"parentId" must be a string/,
+  );
+  assert.throws(
+    () => validateQueryPayload({ name: 'n', query: 'q', parentId: { id: 'x' } }),
+    /"parentId" must be a string/,
+  );
+});
+
+test('a lineage pointer to a query that does not exist is still a valid payload', () => {
+  // Deliberate: validation says nothing about resolvability. An import carrying a fork
+  // whose parent was never exported must still be storable.
+  const out = validateQueryPayload({
+    name: 'n', query: 'q', parentId: 'no-such-query', parentName: 'Gone',
+  });
+  assert.strictEqual(out.parentId, 'no-such-query');
+});
+
+test('lineage survives a partial (PUT) payload', () => {
+  const out = validateQueryPayload({ parentId: 'abc-123' }, { partial: true });
+  assert.strictEqual(out.parentId, 'abc-123');
+});
+
+test('lineage is not folded into the metadata document', () => {
+  const out = validateQueryPayload({
+    name: 'n', query: 'q', parentId: 'abc-123', parentName: 'Parent', severity: 'High',
+  });
+  const metadata = JSON.parse(JSON.stringify(out.metadata));
+  assert.ok(!('parentId' in metadata), 'parentId must not enter the v4 metadata blob');
+  assert.ok(!('parentName' in metadata), 'parentName must not enter the v4 metadata blob');
+  assert.strictEqual(metadata.severity, 'High');
 });

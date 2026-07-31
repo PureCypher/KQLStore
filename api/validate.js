@@ -162,6 +162,19 @@ function validateQueryPayload(body, { partial = false } = {}) {
   const usageCount = checkUsageCount(body.usageCount);
   if (usageCount !== undefined) out.usageCount = usageCount;
 
+  // Fork lineage. parentId is bounded by LIMITS.id because it holds the same kind of
+  // value the id column does; parentName by LIMITS.name because it is a copy of one.
+  //
+  // Neither is checked for resolvability. Whether the parent still exists is a question
+  // about the store rather than about the payload, and "no" is a legitimate answer — an
+  // import can carry a fork whose parent was never exported, and a fork outlives the
+  // query it came from by design (see the comment on the columns in db.js).
+  const parentId = checkString(body.parentId, 'parentId', LIMITS.id, { required: false });
+  if (parentId !== undefined) out.parentId = parentId;
+
+  const parentName = checkString(body.parentName, 'parentName', LIMITS.name, { required: false });
+  if (parentName !== undefined) out.parentName = parentName;
+
   const metadata = checkMetadata(collectMetadata(body));
   if (metadata !== undefined) out.metadata = metadata;
 

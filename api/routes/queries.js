@@ -57,6 +57,12 @@ function toFrontend(row) {
     // Spread the v4 detection block back to the top level, which is the shape the SPA's
     // validateQuery works in. Stored nested so it is one additive column, not seventeen.
     ...parseMetadata(row.metadata),
+    // Lineage is assigned AFTER the spread on purpose. collectMetadata merges body.metadata
+    // wholesale, so a caller can put a parentId inside it; if these were above the spread,
+    // that smuggled value would overwrite the real column and let anyone fake a fork badge.
+    // The column is the truth, so it is written last.
+    parentId: row.parent_id ?? null,
+    parentName: row.parent_name ?? '',
     created: row.created,
     updated: row.updated,
   };
@@ -174,8 +180,8 @@ router.post('/import', (req, res, next) => {
 
     const selectStored = db.prepare('SELECT updated, created, usage_count FROM queries WHERE id = ?');
     const insert = db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, created, updated)
-      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @metadata, @created, @updated)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, created, updated)
+      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @metadata, @parent_id, @parent_name, @created, @updated)
     `);
     const update = db.prepare(`
       UPDATE queries
@@ -188,6 +194,8 @@ router.post('/import', (req, res, next) => {
           favorite    = @favorite,
           usage_count = @usage_count,
           metadata    = @metadata,
+          parent_id   = @parent_id,
+          parent_name = @parent_name,
           updated     = @updated
       WHERE id = @id
     `);
@@ -208,6 +216,8 @@ router.post('/import', (req, res, next) => {
           favorite: item.favorite ? 1 : 0,
           usage_count: Number.isInteger(item.usageCount) && item.usageCount >= 0 ? item.usageCount : 0,
           metadata: JSON.stringify(item.metadata || {}),
+          parent_id: item.parentId ?? null,
+          parent_name: item.parentName ?? '',
           created: item.created || now,
           updated: item.updated || now,
         };
@@ -284,14 +294,14 @@ router.post('/', (req, res, next) => {
   try {
     const v = validateQueryPayload(req.body, { partial: false });
     const { id: suppliedId } = validateSyncFields(req.body);
-    const { name, query, description, category, table, tags, favorite, usageCount } = v;
+    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName } = v;
 
     const now = new Date().toISOString();
     const id = suppliedId || uuidv4();
 
     db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, created, updated)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, created, updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       name,
@@ -303,6 +313,8 @@ router.post('/', (req, res, next) => {
       favorite ? 1 : 0,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : 0,
       JSON.stringify(v.metadata || {}),
+      parentId ?? null,
+      parentName ?? '',
       now,
       now,
     );
@@ -347,7 +359,7 @@ router.put('/:id', (req, res, next) => {
     }
 
     const v = validateQueryPayload(req.body, { partial: true });
-    const { name, query, description, category, table, tags, favorite, usageCount } = v;
+    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName } = v;
     const now = new Date().toISOString();
 
     db.prepare(`
@@ -361,6 +373,8 @@ router.put('/:id', (req, res, next) => {
           favorite    = ?,
           usage_count = ?,
           metadata    = ?,
+          parent_id   = ?,
+          parent_name = ?,
           updated     = ?
       WHERE id = ?
     `).run(
@@ -373,6 +387,10 @@ router.put('/:id', (req, res, next) => {
       favorite !== undefined ? (favorite ? 1 : 0) : existing.favorite,
       Number.isInteger(usageCount) && usageCount >= 0 ? usageCount : existing.usage_count,
       v.metadata !== undefined ? JSON.stringify(v.metadata) : existing.metadata,
+      // A PUT that never mentions lineage must not orphan the fork, so absent coalesces
+      // to the stored value rather than to null.
+      parentId ?? existing.parent_id ?? null,
+      parentName ?? existing.parent_name ?? '',
       now,
       req.params.id,
     );

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const queriesRouter = require('./routes/queries');
+const schemasRouter = require('./routes/schemas');
 const healthRouter = require('./routes/health');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -45,7 +46,7 @@ if (!API_TOKEN) {
   console.warn('API_TOKEN is not set — the API accepts any caller that can reach it. ' +
                'Rely on NetworkPolicy (k8s/api-networkpolicy.yaml) to restrict access.');
 }
-app.use('/api/queries', (req, res, next) => {
+app.use(['/api/queries', '/api/schemas'], (req, res, next) => {
   if (!API_TOKEN) return next();
   const header = req.get('authorization') || '';
   const presented = /^bearer /i.test(header) ? header.slice(7) : '';
@@ -66,6 +67,7 @@ app.use(express.json({ limit: '2mb' }));
 // Routes
 // ---------------------------------------------------------------------------
 app.use('/api/queries', queriesRouter);
+app.use('/api/schemas', schemasRouter);
 app.use('/api/health', healthRouter);
 
 // ---------------------------------------------------------------------------

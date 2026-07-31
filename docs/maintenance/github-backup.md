@@ -7,7 +7,32 @@ Neither answers the question a detection library actually raises six months late
 > When did this detection change, and what did it say before?
 
 `k8s/api-backup-github-cronjob.yaml` answers that by committing **one file per query** to a
-private git repository, so `git log queries/<id>.json` is the history of a single detection.
+private git repository, so `git log queries/<name>.json` is the history of a single detection.
+
+Files are named from the query's name, slugged to `[a-z0-9-]`, because a directory of UUIDs
+is unreadable and being readable is the whole point of this copy:
+
+```
+queries/authentication-failure-pattern-analysis-password-spray-and-brute-force-detection.json
+queries/ai-platform-usage-tracker-user-activity-trend-analysis.json
+queries/dcsync.json
+```
+
+Three consequences, all handled:
+
+- **Names are not unique.** The first claimant of a slug — by id order, which is stable —
+  keeps the bare name; later ones take a short id suffix (`suspicious-logon-bbbbbbbb.json`).
+  Suffixing *everything* on collision would rename an existing file whenever an unrelated
+  query happened to collide with it, so it does not do that.
+- **Names can be empty, non-latin, or enormous.** Empty becomes `untitled`, characters
+  outside `[a-z0-9]` are stripped, and the slug is capped at 80 characters. A name written
+  entirely in a non-latin script slugs to nothing and falls back to `untitled`, then takes
+  an id suffix if that collides — unreadable, but never lost or overwritten.
+- **Renaming a query renames its file**, so git records a delete and an add rather than an
+  edit. Nothing avoids that while filenames carry meaning. The content is byte-identical
+  across the rename, so git's rename detection links them: reach for
+  `git log --follow queries/<name>.json` when a detection's history appears to start
+  abruptly.
 
 It ships unconfigured and fails until you configure it, the same as the off-node job.
 

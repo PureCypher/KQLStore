@@ -57,4 +57,31 @@ if (!hasMetadata) {
   db.prepare("ALTER TABLE queries ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'").run();
 }
 
+// Fork lineage.
+//
+// Deliberately NOT a foreign key, even though foreign_keys is ON above. A FK forces a
+// choice between blocking a parent's deletion and cascading it, and both are wrong here:
+// deleting the Entra query you forked from must neither remove the Okta fork nor stop you
+// deleting the original. An unresolvable parent_id is a display state — "forked from a
+// query that no longer exists" — not an integrity violation. SQLite also forbids
+// REFERENCES in ALTER TABLE ADD COLUMN, so this is the only available path in any case.
+//
+// parent_name is a snapshot of the parent's name at fork time, not a cache of it. It is
+// what lets an orphaned fork still say what it came from, so going stale when the parent
+// is renamed is correct behaviour rather than a bug to fix later.
+const LINEAGE_COLUMNS = [
+  ['parent_id', 'TEXT DEFAULT NULL'],
+  ['parent_name', "TEXT DEFAULT ''"],
+];
+for (const [column, definition] of LINEAGE_COLUMNS) {
+  const present = db
+    .prepare("SELECT COUNT(*) AS n FROM pragma_table_info('queries') WHERE name = ?")
+    .get(column).n > 0;
+  if (!present) {
+    // Interpolated rather than bound: SQLite does not accept parameters in DDL. Both
+    // values are local constants, never request data.
+    db.prepare(`ALTER TABLE queries ADD COLUMN ${column} ${definition}`).run();
+  }
+}
+
 module.exports = db;

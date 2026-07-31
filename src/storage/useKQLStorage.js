@@ -34,8 +34,16 @@ import { StorageAdapter, API_RETRY_INTERVAL_MS } from './adapter.js';
 //   created/updated — bookkeeping, not content; `updated` is the input to the decision.
 //   usageCount      — a local counter the server merges by taking the larger value, so it
 //                     can never regress and reporting it would flag every single row.
+//
+// parentId/parentName ARE included. Re-parenting changes what a query claims to be
+// derived from, which is content, and an import that quietly rewrote a fork's ancestry —
+// or flattened it to nothing — is precisely the silent overwrite this preview exists to
+// stop. parentName earns its place separately: an import from an older export can carry
+// a stale snapshot of a parent that has since been renamed, and replacing the label
+// without saying so would leave the store disagreeing with itself.
 const DIFF_FIELDS = [
   'name', 'query', 'description', 'category', 'table', 'tags', 'favorite',
+  'parentId', 'parentName',
   'queryType', 'severity', 'confidence', 'platform', 'attack', 'dataSources',
   'entityMappings', 'falsePositives', 'references', 'tuningNotes', 'lookback',
   'version', 'lastValidated', 'author', 'license',

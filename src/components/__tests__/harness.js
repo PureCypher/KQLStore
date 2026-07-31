@@ -31,6 +31,8 @@ function makeAppValue(overrides = {}) {
     copyToClipboard: noop,
     deleteQuery: noop,
     duplicateQuery: noop,
+    forkQuery: noop,
+    lineage: { byId: new Map(), forkIndex: new Map() },
     toggleFavorite: noop,
     toggleExpand: noop,
     toggleSelect: noop,

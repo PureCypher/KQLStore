@@ -6,6 +6,7 @@ import { getTableDisplayName } from './domain/tables.js';
 import { validateQuery } from './domain/validate.js';
 import { migrateData } from './domain/migrate.js';
 import { simpleHash } from './domain/hash.js';
+import { makeFork, indexById, childrenOf } from './domain/lineage.js';
 import { safeJsonParse } from './lib/json.js';
 import { StorageAdapter } from './storage/adapter.js';
 import { useKQLStorage } from './storage/useKQLStorage.js';
@@ -115,6 +116,19 @@ export default function App() {
     const ok = await storage.saveQuery(dup);
     addToast(ok ? 'Query duplicated' : 'Duplicate saved locally only — API unreachable', ok ? 'success' : 'error');
   }, [storage, addToast]);
+
+  // Lineage maps are derived from `queries` client-side rather than denormalised into the
+  // database, so they only need to stay in sync with a value already in state.
+  const lineage = useMemo(
+    () => ({ byId: indexById(queries), forkIndex: childrenOf(queries) }),
+    [queries],
+  );
+
+  // Forking opens a draft in the editor rather than writing immediately — the draft's id
+  // is not yet in `queries`, so nothing is persisted until the user saves.
+  const forkQuery = useCallback((source) => {
+    setEditingQuery(makeFork(source, generateId(), new Date().toISOString()));
+  }, []);
 
   // --- Import / Export ---
   const handleExport = useCallback((exportQueries = null) => {
@@ -420,7 +434,7 @@ export default function App() {
     showKeyboardHelp, setShowKeyboardHelp,
     editingQuery, setEditingQuery, saveQuery,
     copyToClipboard,
-    deleteQuery, duplicateQuery, toggleFavorite, toggleExpand, toggleSelect,
+    deleteQuery, duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect,
     selectedIds, setSelectedIds, selectedTags, setSelectedTags,
     queries, stats, allTags, categoryCounts,
     searchRef, searchTerm, setSearchTerm,
@@ -435,7 +449,7 @@ export default function App() {
     expandedIds,
   }), [
     toasts, showKeyboardHelp, editingQuery, saveQuery, copyToClipboard, deleteQuery,
-    duplicateQuery, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
+    duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
     queries, stats, allTags, categoryCounts, searchTerm, selectedCategory, selectedTable,
     showFavoritesOnly, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
     importPreview, confirmImport, handleBulkDelete, handleBulkExport, handleBulkCategory,

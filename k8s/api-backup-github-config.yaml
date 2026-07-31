@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# Destination for the versioned copy of the query set. THE OPERATOR MUST FILL THIS IN.
+#
+# This job is NOT a third backup in the sense the other two are. The local PVC copy and
+# the off-node MinIO copy are snapshots: they answer "what did the store look like on the
+# night of the 3rd". This one answers a question neither can — "when did this detection
+# change, and what did it say before" — by writing one file per query into a git history.
+#
+# READ THIS BEFORE TREATING IT AS A RESTORE PATH
+#
+# With REDACT_DISCLOSURES enabled (the default), the committed copy is deliberately NOT
+# byte-faithful: watchlist names, internal addresses and similar are replaced with
+# REDACTED-<fingerprint> markers. A restore from git would therefore produce queries that
+# parse but do not run. The authoritative restore path remains the MinIO copy — see
+# docs/maintenance/offsite-backup.md and restore-runbook.md. Turn redaction off only once
+# you have decided the destination repository's privacy is protection enough.
+#
+# THE REPOSITORY MUST BE PRIVATE
+#
+# A detection library says as much about what you do not cover as what you do. A scan of
+# the 48 queries in the maintainer's own store found no credentials but did find the full
+# inventory of Sentinel watchlist names — including honeytoken and RC4-exception lists,
+# which are precisely the things an adversary benefits from knowing. GitHub's push
+# protection does not help here: it looks for credentials, and there were none to find.
+# Everything sensitive in a detection set sails straight through it. Privacy of the
+# destination repo is the control, not the platform.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kqlstore-backup-github
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-github
+    app.kubernetes.io/managed-by: kustomize
+data:
+  # owner/repo of a PRIVATE repository. The job refuses to run while this is REPLACE-ME,
+  # and refuses to run if the repository reports itself public — see the preflight in
+  # api-backup-github-cronjob.yaml. Do not point this at KQLStore itself.
+  GITHUB_REPO: "REPLACE-ME"
+
+  # Branch to commit to. Created on first run if the repository is empty.
+  GITHUB_BRANCH: "main"
+
+  # Directory inside the repository. One file per query is written beneath it, named by
+  # the query's stable id, so `git log queries/<id>.json` is the history of one detection.
+  GITHUB_PATH: "queries"
+
+  # Commit identity. Any address works; it does not have to resolve.
+  GIT_AUTHOR_NAME: "kqlstore-backup"
+  GIT_AUTHOR_EMAIL: "kqlstore-backup@users.noreply.github.com"
+
+  # Replace values the scanner classifies as sensitive with REDACTED-<fingerprint>.
+  #
+  # The fingerprint is an HMAC of the value under REDACTION_SALT from the Secret, so the
+  # same value always yields the same marker. That matters twice: the commit is stable
+  # when nothing changed, and a diff still shows when a query switches from one watchlist
+  # to another, without publishing either name. It is not reversible without the salt.
+  #
+  # "false" commits the queries verbatim. Only do that with a private repo you are
+  # confident in, and re-read the scan output first.
+  REDACT_DISCLOSURES: "true"
+
+  # Refuse to publish a local backup older than this. Same reasoning as the off-node job:
+  # if the 03:17 local backup has been failing, this one would otherwise keep committing
+  # nothing-changed against a stale file and report success every night.
+  MAX_AGE_HOURS: "26"
+
+  # Values the scanner must NOT treat as sensitive, because they are public constants and
+  # redacting them would break the query while protecting nothing. Comma-separated,
+  # matched case-insensitively against the whole matched value.
+  #
+  # These four are Microsoft AD extended-rights schema GUIDs, present in every DCSync
+  # detection ever written. Measured against the maintainer's store: without this list,
+  # 11 GUID matches across three queries would have been redacted for no benefit, breaking
+  # the detections in the process.
+  #
+  # Public domains are absent on purpose and do not need listing: the scanner's hostname
+  # rule only matches internal suffixes (.local, .internal, .corp, .lan, .intra, .home,
+  # .ad), so api.openai.com and friends are never candidates in the first place. Adding a
+  # public domain here would be harmless but misleading.
+  SCAN_ALLOWLIST: >-
+    1131f6aa-9c07-11d1-f79f-00c04fc2dcd2,1131f6ab-9c07-11d1-f79f-00c04fc2dcd2,
+    1131f6ad-9c07-11d1-f79f-00c04fc2dcd2,89e95b76-444d-4c62-991a-0facbeda640c

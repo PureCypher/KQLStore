@@ -444,6 +444,8 @@ Stated plainly, so none of it is a surprise later.
 | [docs/kql-linter.md](docs/kql-linter.md) | Every lint rule, its severity, and what it deliberately ignores |
 | [docs/accessibility.md](docs/accessibility.md) | Keyboard shortcuts, dialog behaviour, the editor's Tab capture, how it is tested |
 | [docs/starter-pack.md](docs/starter-pack.md) | What is in the pack, how to load it, and why it is not a set of finished detections |
+| [docs/maintenance/offsite-backup.md](docs/maintenance/offsite-backup.md) | Choosing an off-node destination, configuring it, and what each tier does not survive |
+| [docs/maintenance/github-backup.md](docs/maintenance/github-backup.md) | The versioned copy in git: why it is a history rather than a restore path, and what the scan withholds |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Running it locally, the test commands, commit convention, code style |
 | [SECURITY.md](SECURITY.md) | Reporting a vulnerability, and the deployment's security posture |
 | [CHANGELOG.md](CHANGELOG.md) | What changed and when |

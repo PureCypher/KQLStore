@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Copy, Pencil, Trash2, Star, Clock, Layers, Square, CheckSquare, GitFork } from 'lucide-react';
 import { CATEGORY_COLORS, TABLE_STYLES } from '../constants.js';
 import { getTableDisplayName, getTableGroup } from '../domain/tables.js';
+import { isOrphan } from '../domain/lineage.js';
 import { CodeBlock } from './CodeBlock.jsx';
 import { QueryDescription } from './QueryDescription.jsx';
 import { useApp } from '../context/app.js';
@@ -15,6 +16,7 @@ const QueryCard = React.memo(({ query }) => {
   const confirmRef = useRef(null);
 
   const parentQuery = query.parentId ? lineage.byId.get(query.parentId) ?? null : null;
+  const orphaned = isOrphan(query, lineage.byId);
   const forkCount = (lineage.forkIndex.get(query.id) || []).length;
 
   // Arming the confirmation unmounts the button that was focused, which drops focus to
@@ -118,13 +120,13 @@ const QueryCard = React.memo(({ query }) => {
             <span className="inline-flex items-center gap-1 text-xs text-slate-400">
               <GitFork size={12} aria-hidden="true" />
               forked from{' '}
-              {parentQuery ? (
+              {orphaned ? (
+                <span>{query.parentName || 'a query'} (deleted)</span>
+              ) : (
                 <button type="button" onClick={() => setEditingQuery(parentQuery)}
                   className={`underline hover:text-slate-200 rounded ${FOCUS_RING}`}>
                   {parentQuery.name}
                 </button>
-              ) : (
-                <span>{query.parentName || 'a query'} (deleted)</span>
               )}
             </span>
           )}

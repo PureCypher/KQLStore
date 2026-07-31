@@ -136,4 +136,56 @@ describe('parseGetSchema', () => {
     expect(out.ok).toBe(true);
     expect(out.columns).toEqual([{ name: 'A', type: 'STRING' }]);
   });
+
+  // --- Adversarial-review follow-up: two shapes that previously produced a confidently
+  // wrong ok:true instead of an honest failure or a complete column list. ---
+
+  it('discards both the table name and the continuation pipe when getschema is split across two lines', () => {
+    // `SigninLogs\n| getschema` is how many practitioners actually write the query, and
+    // pasting it along with the results used to leave `SigninLogs` behind as a phantom
+    // bare-identifier line, read as a real (fabricated) column.
+    const text = [
+      'SigninLogs',
+      '| getschema',
+      'ColumnName\tColumnOrdinal\tDataType\tColumnType',
+      'TimeGenerated\t0\tSystem.DateTime\tdatetime',
+    ].join('\n');
+    const out = parseGetSchema(text);
+    expect(out.ok).toBe(true);
+    expect(out.columns).toEqual([{ name: 'TimeGenerated', type: 'datetime' }]);
+  });
+
+  it('still strips the single-line `Table | getschema` form (regression guard)', () => {
+    const text = 'SigninLogs | getschema\nColumnName\tColumnOrdinal\tDataType\tColumnType\nA\t0\tSystem.String\tstring';
+    const out = parseGetSchema(text);
+    expect(out.ok).toBe(true);
+    expect(out.columns).toEqual([{ name: 'A', type: 'string' }]);
+  });
+
+  it('keeps a dotted or hyphenated column name instead of silently dropping it', () => {
+    // Custom tables ingested from JSON or CSV genuinely have dotted/hyphenated column
+    // names. Dropping them without saying so left the user with an incomplete schema and
+    // no signal anything was lost — worse than either keeping them or rejecting outright.
+    const text = [
+      'ColumnName\tColumnOrdinal\tDataType\tColumnType',
+      'Good1\t0\tSystem.String\tstring',
+      'Bad.Name\t1\tSystem.String\tstring',
+      'Good2\t2\tSystem.String\tstring',
+      'Has-Hyphen\t3\tSystem.String\tstring',
+    ].join('\n');
+    const out = parseGetSchema(text);
+    expect(out.ok).toBe(true);
+    expect(out.columns).toEqual([
+      { name: 'Good1', type: 'string' },
+      { name: 'Bad.Name', type: 'string' },
+      { name: 'Good2', type: 'string' },
+      { name: 'Has-Hyphen', type: 'string' },
+    ]);
+  });
+
+  it('still rejects prose after widening the identifier rule to allow dots and hyphens', () => {
+    const out = parseGetSchema('Hello there\nSigninLogs is the table you want');
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/does not look like getschema output/i);
+  });
 });

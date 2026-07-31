@@ -30,8 +30,14 @@ const SYSTEM_TYPES = {
 };
 
 const HEADER = /^columnname\b/i;
-// A line that is a KQL statement rather than a row of output.
+// A line that is a KQL statement rather than a row of output. Matches the single-line form
+// (`SigninLogs | getschema`) and the bare continuation form (`| getschema`) that shows up
+// when a practitioner writes the pipe on its own line, which is how KQL is commonly styled.
 const KQL_PROMPT = /\|\s*getschema\s*$/i;
+// The continuation form specifically — nothing precedes the pipe on that line. When this
+// matches, the table name lives alone on the line above, and it has to be discarded with
+// the prompt or it is read as a phantom column named after the table.
+const CONTINUATION_PROMPT = /^\|\s*getschema\s*$/i;
 
 /** Split one line on whichever separator it actually uses. */
 function splitLine(line) {
@@ -41,14 +47,17 @@ function splitLine(line) {
 }
 
 function normaliseType(raw) {
-  if (typeof raw !== 'string' || !raw.trim()) return 'unknown';
+  if (!raw.trim()) return 'unknown';
   const value = raw.trim();
   return SYSTEM_TYPES[value.toLowerCase()] || value;
 }
 
-// A column name is an identifier. Anything with a space or punctuation in it came from
-// prose, not from getschema.
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A column name is an identifier: it must start with a letter or underscore, but may
+// contain a dot or hyphen after that, because custom tables ingested from JSON or CSV
+// genuinely have dotted or hyphenated column names — dropping those silently would leave
+// the user with an incomplete schema and no signal anything was lost. Whitespace is still
+// excluded, which is what actually distinguishes a column name from a line of prose.
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 
 /**
  * @param {string} text
@@ -59,10 +68,21 @@ export function parseGetSchema(text) {
     return { ok: false, error: 'Nothing to parse.' };
   }
 
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !KQL_PROMPT.test(l));
+  const rawLines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+
+  // Drop KQL statement lines. A bare continuation prompt additionally drops the line
+  // immediately before it when that line is nothing but an identifier — the table name the
+  // pipe-on-its-own-line was continuing — so the query does not leak a fabricated column.
+  const lines = [];
+  for (const line of rawLines) {
+    if (KQL_PROMPT.test(line)) {
+      if (CONTINUATION_PROMPT.test(line) && lines.length > 0 && IDENTIFIER.test(lines[lines.length - 1])) {
+        lines.pop();
+      }
+      continue;
+    }
+    lines.push(line);
+  }
 
   let headerFields = null;
   const columns = [];

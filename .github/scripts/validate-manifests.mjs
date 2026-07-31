@@ -21,6 +21,7 @@
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { Script } from 'node:vm';
 import { parseAllDocuments } from 'yaml';
 
 const MANIFEST_DIR = 'k8s';
@@ -36,6 +37,7 @@ const KUSTOMIZATION_KIND = 'Kustomization';
 
 const failures = [];
 let documentCount = 0;
+let embeddedScriptCount = 0;
 let kustomization = null;
 
 const files = readdirSync(MANIFEST_DIR)
@@ -110,6 +112,59 @@ for (const { location, object } of parsed) {
 }
 
 // -------------------------------------------------------------------------
+// Embedded scripts: `command: [node, -e, <source>]` must at least parse.
+//
+// The backup CronJobs carry their logic inline rather than baking a second image, which
+// is the right trade for this repo but moves a whole class of error past every check it
+// has. A YAML block scalar holding broken JavaScript is still valid YAML: it parses, it
+// applies, the CronJob is created, and nothing complains until the container starts at
+// 03:17 and exits non-zero. This was not hypothetical — an edit once put a `#` comment
+// inside one of these blocks, which is not JavaScript, and only a hand-run `node --check`
+// caught it before it shipped.
+//
+// Compiling with vm.Script parses without executing, so a script that would delete or
+// upload something does neither here. It compiles as CommonJS, matching how `node -e`
+// runs it: `require` is fine, top-level `await` is not, and the scripts wrap async work
+// in an IIFE for exactly that reason.
+// -------------------------------------------------------------------------
+function checkEmbeddedScripts(node, location, path = []) {
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => checkEmbeddedScripts(item, location, [...path, index]));
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+
+  const command = node.command;
+  if (
+    Array.isArray(command) &&
+    command.length >= 3 &&
+    typeof command[0] === 'string' &&
+    /(^|\/)node$/.test(command[0]) &&
+    command[1] === '-e' &&
+    typeof command[2] === 'string'
+  ) {
+    const where = node.name ? `container "${node.name}"` : path.join('.');
+    embeddedScriptCount += 1;
+    try {
+      new Script(command[2], { filename: `${location} ${where}` });
+    } catch (error) {
+      failures.push(
+        `${location}: ${where} has a "node -e" script that does not parse — ` +
+          `${error.message}. It would apply cleanly and fail at container start.`,
+      );
+    }
+  }
+
+  for (const [key, value] of Object.entries(node)) {
+    checkEmbeddedScripts(value, location, [...path, key]);
+  }
+}
+
+for (const { location, object } of parsed) {
+  checkEmbeddedScripts(object, location);
+}
+
+// -------------------------------------------------------------------------
 // Wiring: kustomization.yaml must reference every manifest, and only manifests
 // that exist. Both directions matter — a stale entry breaks the build loudly, a
 // missing entry drops a resource silently.
@@ -145,4 +200,7 @@ if (failures.length > 0) {
 }
 
 const wiring = kustomization ? `, all wired into ${kustomization.file}` : '';
-console.log(`OK — ${documentCount} resource(s) across ${files.length} manifest(s)${wiring}`);
+const scripts = embeddedScriptCount
+  ? `, ${embeddedScriptCount} embedded script(s) parse`
+  : '';
+console.log(`OK — ${documentCount} resource(s) across ${files.length} manifest(s)${wiring}${scripts}`);

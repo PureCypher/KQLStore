@@ -355,17 +355,63 @@ spec:
                     }
                   }
 
-                  // One file per query — this is what makes `git log queries/<id>.json`
+                  // One file per query — this is what makes `git log queries/<file>.json`
                   // the history of a single detection rather than of the whole store.
+                  //
+                  // Named from the query's name, not its id, because a directory of UUIDs
+                  // is unreadable and the point of this copy is that a human can read it.
+                  // Three things that costs, all handled here:
+                  //
+                  //  1. Names are not unique. Ids are, so the first claimant of a slug
+                  //     (by id order, which is stable) keeps the bare name and later ones
+                  //     take an id suffix. Doing it the other way — suffixing everything
+                  //     once a collision appears — would rename an existing file whenever
+                  //     an unrelated query happened to collide with it.
+                  //  2. Names contain characters a filename cannot. Slugged to
+                  //     [a-z0-9-], which is also why case can never collide.
+                  //  3. RENAMING A QUERY RENAMES ITS FILE, so git records a delete and an
+                  //     add rather than an edit. Nothing can avoid that while filenames
+                  //     carry meaning. The content is byte-identical across the rename, so
+                  //     git's rename detection links them and `git log --follow` still
+                  //     walks the whole history — that is the flag to reach for when a
+                  //     detection's past appears to start abruptly.
                   const tree = path.join(STAGE, 'tree');
                   fs.mkdirSync(tree, { recursive: true });
                   const sortKeys = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
+
+                  const slugify = (s) =>
+                    String(s || '')
+                      .normalize('NFKD')
+                      .replace(/[\u0300-\u036f]/g, '')
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, '-')
+                      .replace(/^-+|-+$/g, '')
+                      .slice(0, 80)
+                      .replace(/-+$/, '');
+
+                  const taken = new Set();
+                  const ordered = [...queries].sort((a, b) => (a.id < b.id ? -1 : 1));
+                  const filenames = new Map();
+                  for (const q of ordered) {
+                    const base = slugify(q.name) || 'untitled';
+                    let file = base;
+                    if (taken.has(file)) file = `${base}-${String(q.id).slice(0, 8)}`;
+                    if (taken.has(file)) file = `${base}-${q.id}`;
+                    if (taken.has(file)) {
+                      throw new Error(`cannot derive a unique filename for query ${q.id}`);
+                    }
+                    taken.add(file);
+                    filenames.set(q.id, file);
+                  }
+
                   for (const q of queries) {
                     fs.writeFileSync(
-                      path.join(tree, `${q.id}.json`),
+                      path.join(tree, `${filenames.get(q.id)}.json`),
                       JSON.stringify(sortKeys(q), null, 2) + '\n',
                     );
                   }
+                  const suffixed = [...taken].filter((f) => /-[0-9a-f]{8}$/.test(f)).length;
+                  if (suffixed) console.log(`${suffixed} filename(s) carry an id suffix to break a name collision`);
                   fs.writeFileSync(
                     path.join(tree, '_index.json'),
                     JSON.stringify(

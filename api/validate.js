@@ -38,6 +38,10 @@ const LIMITS = {
   // Upper bound for ?limit=. A full store is a few thousand rows, so this is generous
   // while still stopping a single request from materialising an unbounded result set.
   pageSize: 1000,
+  schemaName: 200,
+  schemaColumns: 500,
+  schemaColumnName: 200,
+  schemaNotes: 5000,
 };
 
 const IMPORT_MODES = ['insert', 'upsert'];
@@ -254,15 +258,69 @@ function validatePagination(query) {
   };
 }
 
+const SCHEMA_SOURCES = ['getschema', 'manual', 'import'];
+
+/**
+ * Validate a table schema. Columns are returned already serialised, because every caller
+ * binds them straight into SQLite and re-stringifying at each call site is how the two
+ * sides drift apart.
+ *
+ * A missing column type is defaulted rather than rejected: `getschema` output pasted from
+ * the portal sometimes loses the type column to a copy that clipped it, and a column list
+ * without types is still far more useful to a reader than no schema at all.
+ */
+function validateSchemaPayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw badRequest('request body must be a JSON object');
+  }
+
+  const name = checkString(body.name, 'name', LIMITS.schemaName, { required: true });
+
+  if (body.columns !== undefined && !Array.isArray(body.columns)) {
+    throw badRequest('"columns" must be an array');
+  }
+  const raw = body.columns || [];
+  if (raw.length > LIMITS.schemaColumns) {
+    throw badRequest(`"columns" exceeds ${LIMITS.schemaColumns} entries`);
+  }
+
+  const columns = raw.map((col) => {
+    if (!col || typeof col !== 'object' || Array.isArray(col)) {
+      throw badRequest('every column must be an object');
+    }
+    if (typeof col.name !== 'string' || !col.name.trim()) {
+      throw badRequest('every column needs a "name"');
+    }
+    if (col.name.length > LIMITS.schemaColumnName) {
+      throw badRequest(`a column name exceeds ${LIMITS.schemaColumnName} characters`);
+    }
+    return {
+      name: col.name.trim(),
+      type: typeof col.type === 'string' && col.type.trim() ? col.type.trim() : 'unknown',
+    };
+  });
+
+  const notes = checkString(body.notes, 'notes', LIMITS.schemaNotes, { required: false }) ?? '';
+
+  const source = body.source ?? 'getschema';
+  if (!SCHEMA_SOURCES.includes(source)) {
+    throw badRequest(`"source" must be one of: ${SCHEMA_SOURCES.join(', ')}`);
+  }
+
+  return { name: name.trim(), columns: JSON.stringify(columns), notes, source };
+}
+
 module.exports = {
   validateQueryPayload,
   validateSyncFields,
   validateImportMode,
   validateExpectedUpdated,
   validatePagination,
+  validateSchemaPayload,
   badRequest,
   CATEGORIES,
   IMPORT_MODES,
   LIMITS,
+  SCHEMA_SOURCES,
   SCHEMA_VERSION,
 };

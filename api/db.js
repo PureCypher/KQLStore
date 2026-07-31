@@ -84,4 +84,16 @@ for (const [column, definition] of LINEAGE_COLUMNS) {
   }
 }
 
+// Table schemas. Independent of `queries` by design: this is reference data about the
+// tables a query reads from, not part of a query record, and nothing joins the two.
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS table_schemas (
+    name    TEXT PRIMARY KEY,
+    columns TEXT NOT NULL DEFAULT '[]',
+    notes   TEXT DEFAULT '',
+    source  TEXT DEFAULT 'getschema',
+    updated TEXT NOT NULL
+  )
+`).run();
+
 module.exports = db;

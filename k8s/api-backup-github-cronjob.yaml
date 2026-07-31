@@ -1,0 +1,650 @@
+# ---------------------------------------------------------------------------
+# Versioned copy of the query set, committed to a PRIVATE git repository.
+#
+# Three initContainers and one main container, run in strict sequence. The pod only
+# reaches the network step if staging and scanning both succeeded, so a store that
+# contains a credential is never published — it fails before anything leaves the cluster.
+#
+# WHY THE GITHUB API AND NOT git
+#
+# There is no git binary here and none is added. The job talks to GitHub's git-data API
+# from the API image, which already carries Node 24 and is already trusted to hold the
+# database. That removes a second image from the supply chain, removes SSH key handling
+# and known_hosts, and removes cloning history the job never reads. It also gets deletions
+# right for free: the tree is submitted whole rather than layered on `base_tree`, so a
+# query deleted from the store disappears from the repository instead of lingering.
+#
+# WHY IT IS NOT A RESTORE PATH
+#
+# With REDACT_DISCLOSURES on, the committed queries are deliberately not byte-faithful.
+# See the header of api-backup-github-config.yaml. MinIO remains the restore path.
+#
+# ORDERING
+#
+# 04:17, an hour after the local backup and half an hour after the off-node one. It reads
+# what the local job wrote, so it must not race it; MAX_AGE_HOURS turns a silently
+# failing local job into a loud failure here rather than a nightly no-change commit.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kqlstore-api-backup-github
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-github
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  schedule: "17 4 * * *"
+  timeZone: Europe/London
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: kqlstore-api-backup-github
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          # The backup PVC is RWO on local-path, so it exists only on the node that
+          # provisioned it — the node the API runs on. Anchor to the API pod rather than
+          # a nodeName so this stays correct if the API is rescheduled.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app: kqlstore-api
+                  topologyKey: kubernetes.io/hostname
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # -----------------------------------------------------------------
+            # 1. Preflight and stage.
+            #
+            # Everything knowable without the network is checked here, so a
+            # misconfigured deployment fails in seconds having done nothing, naming
+            # exactly what is missing.
+            # -----------------------------------------------------------------
+            - name: stage
+              image: 192.168.1.100:5000/kqlstore-api:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-github
+                - secretRef:
+                    name: kqlstore-backup-github
+                    optional: true
+              env:
+                - name: BACKUP_DIR
+                  value: /backup
+                - name: STAGE_DIR
+                  value: /staging
+                - name: NODE_OPTIONS
+                  value: --max-old-space-size=192
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('fs');
+                  const path = require('path');
+                  const crypto = require('crypto');
+                  const Database = require('better-sqlite3');
+
+                  const missing = [];
+                  const need = (k, where) => {
+                    const v = process.env[k];
+                    if (!v || !v.trim() || v.includes('REPLACE-ME')) missing.push(`${k} (${where})`);
+                    return v;
+                  };
+                  need('GITHUB_REPO', 'ConfigMap kqlstore-backup-github');
+                  need('GITHUB_TOKEN', 'Secret kqlstore-backup-github');
+                  if (process.env.REDACT_DISCLOSURES !== 'false') {
+                    need('REDACTION_SALT', 'Secret kqlstore-backup-github');
+                  }
+                  if (missing.length) {
+                    console.error('refusing to run — the destination is not configured:');
+                    for (const m of missing) console.error(`  ${m} is unset or still REPLACE-ME`);
+                    console.error('see docs/maintenance/github-backup.md');
+                    process.exit(1);
+                  }
+                  if (!/^[\w.-]+\/[\w.-]+$/.test(process.env.GITHUB_REPO)) {
+                    console.error(`GITHUB_REPO must be owner/repo, got: ${process.env.GITHUB_REPO}`);
+                    process.exit(1);
+                  }
+
+                  const dir = process.env.BACKUP_DIR;
+                  const files = fs.readdirSync(dir)
+                    .filter((f) => f.startsWith('kqlstore-') && f.endsWith('.db'))
+                    .map((f) => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+                    .sort((a, b) => b.mtime - a.mtime);
+                  if (!files.length) {
+                    console.error(`no backup found in ${dir} — has the local backup CronJob run?`);
+                    process.exit(1);
+                  }
+                  const newest = files[0];
+                  const ageH = (Date.now() - newest.mtime) / 36e5;
+                  const maxAge = Number(process.env.MAX_AGE_HOURS || 26);
+                  if (ageH > maxAge) {
+                    console.error(`newest backup ${newest.name} is ${ageH.toFixed(1)}h old, limit ${maxAge}h.`);
+                    console.error('the local backup job is failing; fix that rather than publishing a stale set.');
+                    process.exit(1);
+                  }
+
+                  const src = path.join(dir, newest.name);
+                  const db = new Database(src, { readonly: true });
+                  const integrity = db.prepare('PRAGMA integrity_check').get();
+                  if (!integrity || integrity.integrity_check !== 'ok') {
+                    console.error(`integrity_check failed on ${newest.name}: ${JSON.stringify(integrity)}`);
+                    process.exit(1);
+                  }
+                  // Mirrors toFrontend() in api/routes/queries.js. usage_count and
+                  // favorite are deliberately dropped: both change when somebody merely
+                  // views a query, so committing them would produce a diff every night
+                  // that says nothing about the detection.
+                  const rows = db.prepare('SELECT * FROM queries ORDER BY id ASC').all();
+                  const queries = rows.map((r) => {
+                    let meta = {};
+                    try { meta = JSON.parse(r.metadata || '{}'); } catch { meta = {}; }
+                    let tags = [];
+                    try { tags = JSON.parse(r.tags || '[]'); } catch { tags = []; }
+                    return {
+                      id: r.id,
+                      name: r.name,
+                      query: r.query,
+                      description: r.description,
+                      category: r.category,
+                      table: r.table_name,
+                      tags: Array.isArray(tags) ? tags.slice().sort() : [],
+                      ...meta,
+                      created: r.created,
+                      updated: r.updated,
+                    };
+                  });
+                  db.close();
+
+                  fs.mkdirSync(process.env.STAGE_DIR, { recursive: true });
+                  fs.writeFileSync(
+                    path.join(process.env.STAGE_DIR, 'queries.json'),
+                    JSON.stringify(queries, null, 2),
+                  );
+                  const digest = crypto.createHash('sha256').update(fs.readFileSync(src)).digest('hex');
+                  console.log(`staged ${queries.length} queries from ${newest.name} (age ${ageH.toFixed(1)}h, integrity ok)`);
+                  console.log(`source sha256 ${digest}`);
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 300m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                  readOnly: true
+                - name: staging
+                  mountPath: /staging
+                - name: tmp
+                  mountPath: /tmp
+
+            # -----------------------------------------------------------------
+            # 2. Scan, gate, redact.
+            #
+            # Two classes, treated differently on purpose:
+            #
+            #   SECRET     a credential. Fails the job. Redacting one and carrying on
+            #              would hide an incident: if a key reached the query store, a
+            #              human needs to know tonight, and the key needs rotating. The
+            #              job stops before anything leaves the cluster.
+            #
+            #   DISCLOSURE not a credential, but internal detail — watchlist names,
+            #              private addresses, identities. Replaced with
+            #              REDACTED-<fingerprint> when REDACT_DISCLOSURES is on.
+            #
+            # The fingerprint is HMAC(REDACTION_SALT, value), truncated. Stable, so an
+            # unchanged store produces an unchanged tree and therefore no commit; and
+            # distinguishing, so a diff still shows a query moving from one watchlist to
+            # another without naming either. Not reversible without the salt.
+            # -----------------------------------------------------------------
+            - name: scan
+              image: 192.168.1.100:5000/kqlstore-api:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-github
+                - secretRef:
+                    name: kqlstore-backup-github
+                    optional: true
+              env:
+                - name: STAGE_DIR
+                  value: /staging
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('fs');
+                  const path = require('path');
+                  const crypto = require('crypto');
+
+                  const STAGE = process.env.STAGE_DIR;
+                  const queries = JSON.parse(fs.readFileSync(path.join(STAGE, 'queries.json'), 'utf8'));
+                  const redact = process.env.REDACT_DISCLOSURES !== 'false';
+                  const salt = process.env.REDACTION_SALT || '';
+                  const allow = new Set(
+                    (process.env.SCAN_ALLOWLIST || '')
+                      .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+                  );
+
+                  const SECRET = [
+                    ['AWS access key id', /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g],
+                    ['Azure storage key', /\bAccountKey\s*=\s*[A-Za-z0-9+/=]{60,}/g],
+                    ['Azure SAS token', /\bsig=[A-Za-z0-9%+/=]{40,}/g],
+                    ['Connection string password', /\b(?:Password|Pwd)\s*=\s*[^;\s"']{6,}/gi],
+                    ['Credential in URL', /\b[a-z]{2,10}:\/\/[^/\s:@]+:[^/\s:@]+@/g],
+                    ['GitHub token', /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g],
+                    ['Slack token', /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g],
+                    ['Google API key', /\bAIza[0-9A-Za-z\-_]{35}\b/g],
+                    ['Private key block', /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY/g],
+                    ['JWT', /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g],
+                    ['Bearer token', /\bBearer\s+[A-Za-z0-9\-._~+/]{20,}/g],
+                    ['Assigned secret', /\b(?:api[_-]?key|apikey|secret|passwd|password|token)\s*[=:]\s*["']?[A-Za-z0-9\-_./+]{12,}/gi],
+                  ];
+                  const DISCLOSURE = [
+                    ['Private IPv4', /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/g],
+                    ['Email or UPN', /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g],
+                    ['UNC path', /\\\\[A-Za-z0-9_.$-]{2,}\\[A-Za-z0-9_.$-]+/g],
+                    ['GUID', /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g],
+                    ['Watchlist name', /_GetWatchlist\s*\(\s*['"]([^'"]+)['"]/gi],
+                    // Internal-looking hostnames only. Public domains are deliberately
+                    // NOT matched: a shadow-AI hunt that looks for api.openai.com
+                    // discloses nothing by naming it, and redacting it would break the
+                    // detection while protecting nothing. These suffixes are the ones
+                    // that only ever appear inside somebody's estate.
+                    ['Internal hostname', /\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:local|internal|corp|lan|intra|home|ad)\b/gi],
+                  ];
+                  const PLACEHOLDER = /^(?:DEVICENAME|HOSTNAME|COMPUTERNAME|INITIALDOMAIN\.com|REDIRECTDOMAIN\.com|example\.com|contoso\.com)$/i;
+
+                  const fingerprint = (v) =>
+                    'REDACTED-' + crypto.createHmac('sha256', salt).update(v).digest('hex').slice(0, 8);
+
+                  const secretHits = [];
+                  const applied = [];
+                  const FIELDS = ['name', 'description', 'query'];
+
+                  for (const q of queries) {
+                    for (const f of FIELDS) {
+                      const text = q[f];
+                      if (typeof text !== 'string' || !text) continue;
+                      for (const [rule, rx] of SECRET) {
+                        for (const m of text.matchAll(rx)) {
+                          secretHits.push({ rule, id: q.id, name: q.name, field: f, len: m[0].length });
+                        }
+                      }
+                    }
+                  }
+                  if (secretHits.length) {
+                    console.error(`REFUSING TO PUBLISH — ${secretHits.length} possible credential(s) in the query store:`);
+                    for (const h of secretHits) {
+                      console.error(`  ${h.rule} in ${h.field} of "${h.name}" (${h.id}), ${h.len} chars`);
+                    }
+                    console.error('');
+                    console.error('Nothing has left the cluster. Treat this as an incident, not a config problem:');
+                    console.error('  1. inspect the named queries in the UI');
+                    console.error('  2. rotate the credential if it is real');
+                    console.error('  3. remove it from the query and let tomorrow’s run publish');
+                    process.exit(1);
+                  }
+
+                  const redactValue = (v) => {
+                    const lower = String(v).toLowerCase();
+                    if (allow.has(lower) || PLACEHOLDER.test(v)) return null;
+                    return fingerprint(v);
+                  };
+
+                  for (const q of queries) {
+                    for (const f of FIELDS) {
+                      if (typeof q[f] !== 'string' || !q[f]) continue;
+                      let text = q[f];
+                      for (const [rule, rx] of DISCLOSURE) {
+                        text = text.replace(rx, (...args) => {
+                          // String.replace hands the callback (match, p1..pN, offset,
+                          // string). Only the watchlist rule captures, so for every other
+                          // rule args[1] is the OFFSET — a number. Reading it as a capture
+                          // fingerprints the offset instead of the value, which throws on
+                          // Hmac.update. Take a capture only when it really is one.
+                          const match = args[0];
+                          const captured = typeof args[1] === 'string' ? args[1] : undefined;
+                          const value = captured !== undefined ? captured : match;
+                          const marker = redactValue(value);
+                          if (!marker) return match;
+                          applied.push({ rule, id: q.id, field: f });
+                          if (!redact) return match;
+                          return match.replace(value, marker);
+                        });
+                      }
+                      if (redact) q[f] = text;
+                    }
+                  }
+
+                  const byRule = {};
+                  for (const a of applied) byRule[a.rule] = (byRule[a.rule] || 0) + 1;
+                  console.log(`scanned ${queries.length} queries — 0 secrets`);
+                  if (!applied.length) {
+                    console.log('no disclosure-class values found');
+                  } else {
+                    console.log(redact ? 'redacted:' : 'found (redaction OFF, committing verbatim):');
+                    for (const [rule, n] of Object.entries(byRule).sort((a, b) => b[1] - a[1])) {
+                      console.log(`  ${rule}: ${n}`);
+                    }
+                  }
+
+                  // One file per query — this is what makes `git log queries/<id>.json`
+                  // the history of a single detection rather than of the whole store.
+                  const tree = path.join(STAGE, 'tree');
+                  fs.mkdirSync(tree, { recursive: true });
+                  const sortKeys = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
+                  for (const q of queries) {
+                    fs.writeFileSync(
+                      path.join(tree, `${q.id}.json`),
+                      JSON.stringify(sortKeys(q), null, 2) + '\n',
+                    );
+                  }
+                  fs.writeFileSync(
+                    path.join(tree, '_index.json'),
+                    JSON.stringify(
+                      {
+                        totalQueries: queries.length,
+                        redaction: redact ? 'enabled' : 'disabled',
+                        redactedValues: applied.length,
+                        redactedByRule: sortKeys(byRule),
+                        note: redact
+                          ? 'Values shown as REDACTED-<fingerprint> are withheld. This copy is a history, not a restore artifact; restore from the MinIO copy.'
+                          : 'Committed verbatim.',
+                      },
+                      null, 2,
+                    ) + '\n',
+                  );
+                  console.log(`wrote ${queries.length + 1} files to the staging tree`);
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 300m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: staging
+                  mountPath: /staging
+                - name: tmp
+                  mountPath: /tmp
+
+            # -----------------------------------------------------------------
+            # 3. Confirm the destination is private.
+            #
+            # Separate from the publish step and ahead of it, because getting this wrong
+            # is the one failure with no undo. A public repository cannot be made private
+            # after the fact in any meaningful sense — forks, clones and search indexes
+            # outlive the setting.
+            # -----------------------------------------------------------------
+            - name: verify-private
+              image: 192.168.1.100:5000/kqlstore-api:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-github
+                - secretRef:
+                    name: kqlstore-backup-github
+                    optional: true
+              command:
+                - node
+                - -e
+                - |
+                  const api = process.env.GITHUB_API || 'https://api.github.com';
+                  const repo = process.env.GITHUB_REPO;
+                  const headers = {
+                    authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                    accept: 'application/vnd.github+json',
+                    'user-agent': 'kqlstore-backup',
+                    'x-github-api-version': '2022-11-28',
+                  };
+                  (async () => {
+                    const r = await fetch(`${api}/repos/${repo}`, { headers });
+                    if (r.status === 404) {
+                      console.error(`${repo} not found, or the token cannot see it.`);
+                      console.error('the token needs Contents: read and write on that repository.');
+                      process.exit(1);
+                    }
+                    if (!r.ok) {
+                      console.error(`GitHub returned ${r.status} for ${repo}: ${(await r.text()).slice(0, 200)}`);
+                      process.exit(1);
+                    }
+                    const meta = await r.json();
+                    if (meta.private !== true) {
+                      console.error(`REFUSING TO PUBLISH — ${repo} is PUBLIC.`);
+                      console.error('a detection library discloses what you do not cover as much as what you do.');
+                      console.error('point GITHUB_REPO at a private repository; nothing has been pushed.');
+                      process.exit(1);
+                    }
+                    console.log(`destination ${repo} is private, default branch ${meta.default_branch}`);
+                  })().catch((e) => { console.error(e.message); process.exit(1); });
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 48Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          # -------------------------------------------------------------------
+          # 4. Commit, but only if something actually changed.
+          #
+          # The tree is submitted whole rather than on top of `base_tree`, so a query
+          # deleted from the store disappears here too. The new tree's sha is compared
+          # against the current commit's tree sha, and an identical tree ends the run
+          # without a commit — otherwise every night would add an empty commit and the
+          # history would stop meaning anything.
+          # -------------------------------------------------------------------
+          containers:
+            - name: publish
+              image: 192.168.1.100:5000/kqlstore-api:latest
+              imagePullPolicy: Always
+              workingDir: /app
+              envFrom:
+                - configMapRef:
+                    name: kqlstore-backup-github
+                - secretRef:
+                    name: kqlstore-backup-github
+                    optional: true
+              env:
+                - name: STAGE_DIR
+                  value: /staging
+              command:
+                - node
+                - -e
+                - |
+                  const fs = require('fs');
+                  const path = require('path');
+
+                  const api = process.env.GITHUB_API || 'https://api.github.com';
+                  const repo = process.env.GITHUB_REPO;
+                  const branch = process.env.GITHUB_BRANCH || 'main';
+                  const prefix = (process.env.GITHUB_PATH || 'queries').replace(/^\/+|\/+$/g, '');
+                  const H = {
+                    authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                    accept: 'application/vnd.github+json',
+                    'content-type': 'application/json',
+                    'user-agent': 'kqlstore-backup',
+                    'x-github-api-version': '2022-11-28',
+                  };
+                  const gh = async (method, url, body) => {
+                    const r = await fetch(`${api}${url}`, {
+                      method, headers: H, body: body ? JSON.stringify(body) : undefined,
+                    });
+                    if (!r.ok && r.status !== 404) {
+                      throw new Error(`${method} ${url} -> ${r.status}: ${(await r.text()).slice(0, 300)}`);
+                    }
+                    return { status: r.status, body: r.status === 404 ? null : await r.json() };
+                  };
+
+                  (async () => {
+                    const dir = path.join(process.env.STAGE_DIR, 'tree');
+                    const files = fs.readdirSync(dir).sort();
+                    const tree = files.map((f) => ({
+                      path: `${prefix}/${f}`,
+                      mode: '100644',
+                      type: 'blob',
+                      content: fs.readFileSync(path.join(dir, f), 'utf8'),
+                    }));
+
+                    const ref = await gh('GET', `/repos/${repo}/git/ref/heads/${branch}`);
+                    let parents = [];
+                    let baseTreeSha = null;
+                    if (ref.status !== 404) {
+                      parents = [ref.body.object.sha];
+                      const commit = await gh('GET', `/repos/${repo}/git/commits/${ref.body.object.sha}`);
+                      baseTreeSha = commit.body.tree.sha;
+                    } else {
+                      console.log(`branch ${branch} does not exist yet — creating it with the first commit`);
+                    }
+
+                    const created = await gh('POST', `/repos/${repo}/git/trees`, { tree });
+                    if (baseTreeSha && created.body.sha === baseTreeSha) {
+                      console.log('no change since the last run — nothing committed');
+                      console.log(`tree ${baseTreeSha} unchanged, ${files.length} files`);
+                      return;
+                    }
+
+                    const stamp = new Date().toISOString().slice(0, 10);
+                    const idx = JSON.parse(fs.readFileSync(path.join(dir, '_index.json'), 'utf8'));
+                    const commit = await gh('POST', `/repos/${repo}/git/commits`, {
+                      message:
+                        `backup: query set as of ${stamp}\n\n` +
+                        `${idx.totalQueries} queries. Redaction ${idx.redaction}` +
+                        (idx.redactedValues ? `, ${idx.redactedValues} value(s) withheld.` : '.') +
+                        '\n\nWritten by the kqlstore-api-backup-github CronJob. With redaction enabled ' +
+                        'this is a history, not a restore artifact — restore from the off-node copy.',
+                      tree: created.body.sha,
+                      parents,
+                      author: {
+                        name: process.env.GIT_AUTHOR_NAME || 'kqlstore-backup',
+                        email: process.env.GIT_AUTHOR_EMAIL || 'kqlstore-backup@users.noreply.github.com',
+                        date: new Date().toISOString(),
+                      },
+                    });
+
+                    if (ref.status === 404) {
+                      await gh('POST', `/repos/${repo}/git/refs`, {
+                        ref: `refs/heads/${branch}`, sha: commit.body.sha,
+                      });
+                    } else {
+                      await gh('PATCH', `/repos/${repo}/git/refs/heads/${branch}`, {
+                        sha: commit.body.sha, force: false,
+                      });
+                    }
+                    console.log(`committed ${commit.body.sha.slice(0, 8)} to ${repo}@${branch}`);
+                    console.log(`${files.length} files, ${idx.totalQueries} queries, redaction ${idx.redaction}`);
+                  })().catch((e) => { console.error(e.message); process.exit(1); });
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 300m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: staging
+                  mountPath: /staging
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: kqlstore-api-backup
+            # Scratch for one Job only. sizeLimit means a runaway export evicts this pod
+            # rather than filling the node's root disk and taking the API down with it.
+            - name: staging
+              emptyDir:
+                sizeLimit: 256Mi
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+---
+# ---------------------------------------------------------------------------
+# The job needs DNS and outbound HTTPS to GitHub, and nothing else. No ingress at all.
+#
+# The egress rule cannot name api.github.com — NetworkPolicy selects by IP, not hostname,
+# and GitHub's addresses move. 443 to any routable address is the honest expression of
+# what this job needs; the link-local range is excluded because nothing here has business
+# talking to a cloud metadata endpoint.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-api-backup-github
+  namespace: kqlstore
+  labels:
+    app: kqlstore-api-backup-github
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: kqlstore-api-backup-github
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

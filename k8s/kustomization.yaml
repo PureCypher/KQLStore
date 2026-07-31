@@ -31,10 +31,17 @@ resources:
   # rather than a quietly absent one. Its credentials are deliberately NOT here: see
   # docs/maintenance/offsite-backup-secret.example.yaml for why applying this repo must
   # never be able to overwrite them.
+  #
+  # The git job is a third destination but not a third snapshot: it commits one file per
+  # query so the history answers "when did this detection change", which neither blob
+  # copy can. It ships with the same REPLACE-ME landmines, and additionally refuses to
+  # publish to a repository that reports itself public.
   - api-networkpolicy.yaml
   - api-backup-cronjob.yaml
   - api-backup-offsite-config.yaml
   - api-backup-offsite-cronjob.yaml
+  - api-backup-github-config.yaml
+  - api-backup-github-cronjob.yaml
 
 # Applied on top of the labels each manifest already declares. commonLabels also injects
 # into selectors, which would rewrite the immutable spec.selector of the existing

@@ -64,4 +64,23 @@ describe('SidebarContent lineage filter', () => {
     expect(setLineageFilter).toHaveBeenCalledWith(null);
     cleanup();
   });
+
+  // Regression: the section used to be gated on `lineageCounts.forks > 0` alone. Filtering to
+  // Orphans and then resolving the last orphan (its parent comes back, or the orphan itself is
+  // deleted) drops every count to zero and used to unmount the whole section — including the
+  // active "Orphans" toggle that is the only thing explaining why the list is empty. "Clear all
+  // filters" was still reachable, but it also wipes search/category/table/tag/favourites state
+  // the user never asked to lose.
+  it('keeps the section (and the active toggle) mounted when a lineage filter is active even if every count is zero', () => {
+    // No forks anywhere in the store, yet a lineage filter is already set — the state this
+    // component must never actively cause (App clears it once the source list can't produce
+    // it), but the component must still render sanely if it is reached, e.g. mid-transition
+    // right after the underlying data changed.
+    const queries = [parent];
+    renderWithApp(h(SidebarContent), { queries, lineage: lineageFor(queries), lineageFilter: 'orphans' });
+    expect(screen.getByText('Lineage')).toBeTruthy();
+    const orphansBtn = screen.getByRole('button', { name: /Orphans, 0 queries/i });
+    expect(orphansBtn.getAttribute('aria-pressed')).toBe('true');
+    cleanup();
+  });
 });

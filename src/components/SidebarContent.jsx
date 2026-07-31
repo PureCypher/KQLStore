@@ -28,8 +28,13 @@ const LINEAGE_FILTERS = [
 // the dimmest step on the Tailwind grey ramp that passes here.
 const SidebarContent = () => {
   const { allTags, categoryCounts, clearFilters, hasActiveFilters, lineage, lineageFilter, queries, searchRef, searchTerm, selectedCategory, selectedTable, selectedTags, setLineageFilter, setSearchTerm, setSelectedCategory, setSelectedTable, setSelectedTags, setShowFavoritesOnly, setSortBy, setSortDir, setTableFilterExpanded, showFavoritesOnly, sortBy, sortDir, stats, tableFilterExpanded } = useApp();
-  // Counts drive both the visible badge and whether the section renders at all — a store
-  // with no forks has nothing to filter by, so showing three empty toggles would be noise.
+  // Counts drive both the visible badge and, together with `lineageFilter`, whether the
+  // section renders at all: a store with no forks has nothing to filter by (three empty
+  // toggles would be noise), but the section stays mounted whenever a lineage filter is
+  // already active even if its count has since dropped to zero — e.g. the user filtered to
+  // Orphans, then the last orphan's parent was restored. Hiding the control in that moment
+  // would strand the user on a filtered, unexplained list with no way back short of "Clear
+  // all filters", which also wipes every other filter they did not ask to lose.
   const lineageCounts = {
     forks: queries.filter((q) => matchesLineageFilter(q, 'forks', lineage.forkIndex, lineage.byId)).length,
     parents: queries.filter((q) => matchesLineageFilter(q, 'parents', lineage.forkIndex, lineage.byId)).length,
@@ -120,7 +125,7 @@ const SidebarContent = () => {
       })}
     </div>
 
-    {lineageCounts.forks > 0 && (
+    {(lineageCounts.forks > 0 || lineageFilter) && (
       <div>
         <h2 className="text-xs text-gray-400 uppercase tracking-wider mb-2">Lineage</h2>
         <div className="space-y-0.5">

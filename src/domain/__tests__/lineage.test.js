@@ -226,4 +226,26 @@ describe('matchesLineageFilter', () => {
     const got = all.filter((x) => matchesLineageFilter(x, 'orphans', idx, byId));
     expect(got.map((x) => x.id)).toEqual(['o1']);
   });
+
+  it('a mid-chain query is both a fork and a parent at once, not one or the other', () => {
+    // root -> middle -> leaf. `middle` has a parent (root) AND a child (leaf), so it must
+    // match 'forks' and 'parents' simultaneously. The three predicates are independent
+    // checks on the same query, not branches of a single classification — collapsing them
+    // into an if/else chain (as if every query were exactly one of fork/parent/neither)
+    // would silently drop `middle` from one of the two filters it belongs in.
+    const root = q('root');
+    const middle = q('middle', { parentId: 'root' });
+    const leaf = q('leaf', { parentId: 'middle' });
+    const chain = [root, middle, leaf];
+    const chainIdx = childrenOf(chain);
+    const chainById = indexById(chain);
+
+    const forksResult = chain.filter((x) => matchesLineageFilter(x, 'forks', chainIdx, chainById));
+    const parentsResult = chain.filter((x) => matchesLineageFilter(x, 'parents', chainIdx, chainById));
+    const orphansResult = chain.filter((x) => matchesLineageFilter(x, 'orphans', chainIdx, chainById));
+
+    expect(forksResult.map((x) => x.id).sort()).toEqual(['leaf', 'middle']);
+    expect(parentsResult.map((x) => x.id).sort()).toEqual(['middle', 'root']);
+    expect(orphansResult).toEqual([]);
+  });
 });

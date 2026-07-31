@@ -37,7 +37,12 @@ data:
   # owner/repo of a PRIVATE repository. The job refuses to run while this is REPLACE-ME,
   # and refuses to run if the repository reports itself public — see the preflight in
   # api-backup-github-cronjob.yaml. Do not point this at KQLStore itself.
-  GITHUB_REPO: "REPLACE-ME"
+  #
+  # This deployment uses PureCypher/KQL_Backup, confirmed private at the time it was set.
+  # That confirmation is not load-bearing: the verify-private initContainer re-reads the
+  # repository's own metadata on every single run, so flipping it to public later stops
+  # the backup rather than publishing the library.
+  GITHUB_REPO: "PureCypher/KQL_Backup"
 
   # Branch to commit to. Created on first run if the repository is empty.
   GITHUB_BRANCH: "main"

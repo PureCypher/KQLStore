@@ -24,6 +24,7 @@ import { SidebarContent } from './components/SidebarContent.jsx';
 import { ImportPreviewModal } from './components/ImportPreviewModal.jsx';
 import { BulkActionBar } from './components/BulkActionBar.jsx';
 import { SavingIndicator } from './components/SavingIndicator.jsx';
+import { SchemaView } from './components/SchemaView.jsx';
 
 export default function App() {
   const storage = useKQLStorage();
@@ -37,6 +38,9 @@ export default function App() {
     stats,
   } = storage;
 
+  // No router: the app has exactly two top-level views, switched by hand. A router
+  // pulls in URL handling this deployment does not use and was never asked to change.
+  const [view, setView] = useState('queries');
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebounce(searchTerm, 250);
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -56,6 +60,13 @@ export default function App() {
   const [importPreview, setImportPreview] = useState(null); // {text, preview} for import preview modal
   const [toasts, setToasts] = useState([]);
   const mobileSidebarTitleId = useId();
+  const tabBaseId = useId();
+  const tabIds = {
+    queriesTab: `${tabBaseId}-queries-tab`,
+    queriesPanel: `${tabBaseId}-queries-panel`,
+    schemasTab: `${tabBaseId}-schemas-tab`,
+    schemasPanel: `${tabBaseId}-schemas-panel`,
+  };
   const searchRef = useRef(null);
   const fileInputRef = useRef(null);
   const toastIdRef = useRef(0);
@@ -489,7 +500,7 @@ export default function App() {
             other overlays: a focus trap, Escape to close, and focus returned to the button
             that opened it. It was previously a bare div, so a keyboard or screen-reader
             user could tab straight through it into the cards underneath. */}
-        {showMobileSidebar && (
+        {view === 'queries' && showMobileSidebar && (
           <Modal
             labelledBy={mobileSidebarTitleId}
             onClose={() => setShowMobileSidebar(false)}
@@ -510,37 +521,78 @@ export default function App() {
           </Modal>
         )}
 
-        {/* Desktop sidebar */}
-        <aside className="hidden lg:block w-72 shrink-0 h-full overflow-hidden" style={{ borderRight: '1px solid #1e1e2e' }}>
-          <SidebarContent />
-        </aside>
+        {/* Desktop sidebar — query filters only; the schema view has no use for them. */}
+        {view === 'queries' && (
+          <aside className="hidden lg:block w-72 shrink-0 h-full overflow-hidden" style={{ borderRight: '1px solid #1e1e2e' }}>
+            <SidebarContent />
+          </aside>
+        )}
 
         {/* Main content */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Header */}
           <header className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: '1px solid #1e1e2e', background: '#0d0d14' }}>
             <div className="flex items-center gap-3">
-              <button onClick={() => setShowMobileSidebar(true)} aria-label="Open filters" title="Filters" className="lg:hidden p-1.5 rounded-md hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
-                <Filter size={16} className="text-gray-400" />
-              </button>
+              {view === 'queries' && (
+                <button onClick={() => setShowMobileSidebar(true)} aria-label="Open filters" title="Filters" className="lg:hidden p-1.5 rounded-md hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
+                  <Filter size={16} className="text-gray-400" />
+                </button>
+              )}
               <h1 className="text-lg font-bold tracking-tight">
                 <span style={{ color: '#00ff88' }}>&gt;</span> <span className="text-gray-200">kql_store</span>
               </h1>
-              <span className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
-                style={{ background: '#1a1a2e', color: '#00d4ff', border: '1px solid #2a2a3e' }}>{queries.length} queries</span>
+              {view === 'queries' && (
+                <span className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
+                  style={{ background: '#1a1a2e', color: '#00d4ff', border: '1px solid #2a2a3e' }}>{queries.length} queries</span>
+              )}
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setEditingQuery({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
-                style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} /><span className="hidden sm:inline">New Query</span></button>
-              <button onClick={() => fileInputRef.current?.click()} aria-label="Import queries from a JSON file"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
-                style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Upload size={14} /><span className="hidden sm:inline">Import</span></button>
-              <ExportMenu queries={filteredQueries} onToast={addToast} />
-              <button onClick={() => setShowKeyboardHelp(true)} aria-label="Keyboard shortcuts" className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Keyboard shortcuts (?)">
-                <Keyboard size={14} className="text-gray-500" />
-              </button>
-            </div>
+            {view === 'queries' && (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setEditingQuery({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
+                  style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} /><span className="hidden sm:inline">New Query</span></button>
+                <button onClick={() => fileInputRef.current?.click()} aria-label="Import queries from a JSON file"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+                  style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Upload size={14} /><span className="hidden sm:inline">Import</span></button>
+                <ExportMenu queries={filteredQueries} onToast={addToast} />
+                <button onClick={() => setShowKeyboardHelp(true)} aria-label="Keyboard shortcuts" className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Keyboard shortcuts (?)">
+                  <Keyboard size={14} className="text-gray-500" />
+                </button>
+              </div>
+            )}
           </header>
+
+          {/* View switch. The app has exactly two top-level views and no router — see
+              the note by the `view` state above. */}
+          <div role="tablist" aria-label="View" className="flex items-center gap-1 px-4 pt-2 shrink-0" style={{ background: '#0d0d14', borderBottom: '1px solid #1e1e2e' }}>
+            <button
+              role="tab"
+              id={tabIds.queriesTab}
+              aria-selected={view === 'queries'}
+              aria-controls={tabIds.queriesPanel}
+              onClick={() => setView('queries')}
+              className="px-3 py-1.5 text-xs rounded-t-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+              style={{
+                background: view === 'queries' ? '#12121a' : 'transparent',
+                color: view === 'queries' ? '#00ff88' : '#9ca3af',
+                border: `1px solid ${view === 'queries' ? '#2a2a3e' : 'transparent'}`,
+                borderBottom: view === 'queries' ? '1px solid #12121a' : '1px solid transparent',
+              }}
+            >Queries</button>
+            <button
+              role="tab"
+              id={tabIds.schemasTab}
+              aria-selected={view === 'schemas'}
+              aria-controls={tabIds.schemasPanel}
+              onClick={() => setView('schemas')}
+              className="px-3 py-1.5 text-xs rounded-t-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+              style={{
+                background: view === 'schemas' ? '#12121a' : 'transparent',
+                color: view === 'schemas' ? '#00ff88' : '#9ca3af',
+                border: `1px solid ${view === 'schemas' ? '#2a2a3e' : 'transparent'}`,
+                borderBottom: view === 'schemas' ? '1px solid #12121a' : '1px solid transparent',
+              }}
+            >Schemas</button>
+          </div>
 
           {/* Storage error banner */}
           {storageError && (
@@ -557,7 +609,9 @@ export default function App() {
           )}
 
           {/* Query list */}
-          <div className="flex-1 overflow-y-auto p-4" style={{ paddingBottom: showInspector ? 'calc(50vh + 16px)' : undefined }}>
+          {view === 'queries' && (
+          <div role="tabpanel" id={tabIds.queriesPanel} aria-labelledby={tabIds.queriesTab}
+            className="flex-1 overflow-y-auto p-4" style={{ paddingBottom: showInspector ? 'calc(50vh + 16px)' : undefined }}>
             {filteredQueries.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-center">
                 {queries.length === 0 ? (
@@ -586,6 +640,13 @@ export default function App() {
               </div>
             )}
           </div>
+          )}
+
+          {view === 'schemas' && (
+            <div role="tabpanel" id={tabIds.schemasPanel} aria-labelledby={tabIds.schemasTab} className="flex-1 flex flex-col min-w-0 overflow-hidden">
+              <SchemaView />
+            </div>
+          )}
 
           {/* Status bar */}
           <footer className="hidden sm:flex items-center justify-between px-4 py-1.5 text-xs font-mono shrink-0"

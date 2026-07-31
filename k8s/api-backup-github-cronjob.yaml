@@ -532,10 +532,35 @@ spec:
                     const ref = await gh('GET', `/repos/${repo}/git/ref/heads/${branch}`);
                     let parents = [];
                     let baseTreeSha = null;
+                    let carried = 0;
                     if (ref.status !== 404) {
                       parents = [ref.body.object.sha];
                       const commit = await gh('GET', `/repos/${repo}/git/commits/${ref.body.object.sha}`);
                       baseTreeSha = commit.body.tree.sha;
+
+                      // Carry forward everything OUTSIDE the managed prefix.
+                      //
+                      // The tree is submitted whole rather than on base_tree, which is what
+                      // makes a deleted query disappear instead of lingering. The cost is
+                      // that a whole tree IS the repository root: without this step the
+                      // commit silently deletes every file the job did not write. It did
+                      // exactly that on first run against a repo created with a README,
+                      // removing it. Re-adding the untouched entries keeps the deletion
+                      // semantics inside the prefix and leaves the rest of the repo alone.
+                      const base = await gh('GET', `/repos/${repo}/git/trees/${baseTreeSha}?recursive=1`);
+                      if (base.body && base.body.truncated) {
+                        throw new Error(
+                          'base tree came back truncated; refusing to commit because files ' +
+                          'outside ' + prefix + '/ could not be enumerated and would be deleted',
+                        );
+                      }
+                      for (const e of (base.body?.tree || [])) {
+                        if (e.type !== 'blob') continue;
+                        if (e.path === `${prefix}` || e.path.startsWith(`${prefix}/`)) continue;
+                        tree.push({ path: e.path, mode: e.mode, type: 'blob', sha: e.sha });
+                        carried++;
+                      }
+                      if (carried) console.log(`carrying ${carried} file(s) from outside ${prefix}/ unchanged`);
                     } else {
                       console.log(`branch ${branch} does not exist yet — creating it with the first commit`);
                     }

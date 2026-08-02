@@ -1,0 +1,9 @@
+{
+  "name": "kqlstore-ai",
+  "version": "1.0.0",
+  "description": "Stateless LLM proxy for KQL Store. Holds no data and mounts no volume.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20 <25" },
+  "dependencies": { "express": "^5.2.1" }
+}

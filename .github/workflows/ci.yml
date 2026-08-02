@@ -166,6 +166,40 @@ jobs:
           node --test "test/**/*.test.js"
 
   # -------------------------------------------------------------------------
+  # kqlstore-ai unit tests. Same shape as the API job: node --test, no framework,
+  # guarded on the directory existing. Its suite is what proves the chat route
+  # redacts before egress and refuses secrets, which is the security property of
+  # the whole AI feature.
+  # -------------------------------------------------------------------------
+  ai-test:
+    name: AI service tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api-ai
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: api-ai/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: |
+          if [ ! -d test ]; then
+            echo "::notice title=AI tests::api-ai/test/ does not exist yet — nothing to run."
+            exit 0
+          fi
+          node --test "test/**/*.test.js"
+
+  # -------------------------------------------------------------------------
   # Both images have to build from a clean checkout. This is the only job that
   # exercises the esbuild/tailwind frontend build and the better-sqlite3 native
   # install as they actually happen at release time.
@@ -183,13 +217,18 @@ jobs:
       - name: Build API image
         run: docker build --pull --tag kqlstore-api:ci ./api
 
+      # The AI image builds with the repo root as context: it needs api/lib/redact.js,
+      # which is copied in by the Dockerfile rather than duplicated.
+      - name: Build AI image
+        run: docker build --pull --tag kqlstore-ai:ci -f api-ai/Dockerfile .
+
       # The frontend runs as nginx's unprivileged uid and the API as 1000; both k8s
       # deployments set runAsNonRoot, which fails the pod at admission — not at
       # build — if an image reverts to root. Catch it here instead.
       - name: Assert images do not run as root
         run: |
           status=0
-          for image in kqlstore:ci kqlstore-api:ci; do
+          for image in kqlstore:ci kqlstore-api:ci kqlstore-ai:ci; do
             user=$(docker image inspect --format '{{.Config.User}}' "$image")
             if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
               echo "::error title=Image runs as root::$image has USER '$user'"

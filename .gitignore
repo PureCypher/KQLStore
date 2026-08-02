@@ -5,6 +5,11 @@ dist/
 # Dependencies
 node_modules/
 
+# The AI service's copy of the shared redaction module. The Dockerfile copies
+# api/lib/redact.js into the image; locally it is a symlink so there is exactly
+# one source of truth rather than a file that can drift (see api-ai/Dockerfile).
+api-ai/lib/redact.js
+
 # Local data
 *.db
 *.db-wal

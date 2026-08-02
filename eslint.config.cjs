@@ -160,10 +160,13 @@ module.exports = [
   },
 
   // -------------------------------------------------------------------------
-  // API server — CommonJS on Node, no JSX, no React.
+  // API server and the kqlstore-ai proxy — CommonJS on Node, no JSX, no React.
+  // They share the same ruleset and the same stance: two drifting rule tables is
+  // exactly the failure lib/redact.js exists to prevent, so one lint block keeps
+  // them honest together.
   // -------------------------------------------------------------------------
   {
-    files: ['api/**/*.js'],
+    files: ['api/**/*.js', 'api-ai/**/*.js'],
     ...js.configs.recommended,
     languageOptions: {
       ecmaVersion: 'latest',

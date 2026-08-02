@@ -22,7 +22,16 @@ global.fetch = async (url, init) => {
     return {
       ok: true,
       status: 200,
-      body: (async function* () { yield Buffer.from(upstream.reply); })(),
+      // Yield what undici's fetch actually yields: plain Uint8Array chunks, never
+      // Buffer. A Buffer-based mock passed while production streams came back empty
+      // (readEvents only handled Buffer). Split mid-line so the cross-chunk
+      // reassembly path is exercised too.
+      body: (async function* () {
+        const bytes = new TextEncoder().encode(upstream.reply);
+        const mid = Math.ceil(bytes.length / 2);
+        yield bytes.slice(0, mid);
+        yield bytes.slice(mid);
+      })(),
     };
   }
   return realFetch(url, init);

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useId, useRef, useCallback } from 'react';
-import { Search, Plus, Trash2, Download, Upload, X, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Trash2, Download, Upload, AlertTriangle } from 'lucide-react';
 import { parseGetSchema } from '../domain/getschema.js';
 import { StorageAdapter } from '../storage/adapter.js';
 import { safeJsonParse } from '../lib/json.js';
 import { useToast } from '../context/toast.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { Modal } from './Modal.jsx';
+import { ImportPreviewShell } from './ImportPreviewShell.jsx';
 import { FOCUS_RING } from './a11y.jsx';
 
 // ---------------------------------------------------------------------------
@@ -137,54 +138,38 @@ const IMPORT_STATUS_COLORS = { add: '#00ff88', update: '#00d4ff', error: '#ff444
 const IMPORT_STATUS_LABELS = { add: 'New', update: 'Update', error: 'Invalid' };
 
 function SchemaImportModal({ preview, importing, onCancel, onConfirm }) {
-  const titleId = useId();
   const summaryId = useId();
   const acceptedCount = preview.willAdd + preview.willUpdate;
   return (
-    <Modal
-      labelledBy={titleId}
+    <ImportPreviewShell
+      title="Import Schemas"
+      items={preview.items}
+      statusColors={IMPORT_STATUS_COLORS}
+      statusLabels={IMPORT_STATUS_LABELS}
+      listAriaLabel="Schemas in this import"
       onClose={onCancel}
-      backdropClassName="z-[80] items-start justify-center pt-8 pb-8 overflow-y-auto"
-      className="rounded-xl p-6 font-mono w-full max-w-xl mx-4"
-      style={{ background: '#12121a', border: '1px solid #2a2a3e' }}
-    >
-      <div className="flex justify-between items-center mb-4">
-        <h2 id={titleId} className="text-lg font-bold" style={{ color: '#00ff88' }}>Import Schemas</h2>
-        <button onClick={onCancel} className={`p-1 rounded hover:bg-white/10 ${FOCUS_RING}`}
-          aria-label="Close import preview" title="Close">
-          <X size={16} className="text-gray-400" aria-hidden="true" />
-        </button>
-      </div>
-      <div id={summaryId} className="flex gap-4 mb-4 text-xs">
-        <span style={{ color: '#00ff88' }}>{preview.willAdd} new</span>
-        <span style={{ color: '#00d4ff' }}>{preview.willUpdate} updated</span>
-        <span style={{ color: '#ff4444' }}>{preview.willError} invalid</span>
-        <span className="ml-auto text-gray-500">{preview.total} total</span>
-      </div>
-      <ul aria-label="Schemas in this import" className="max-h-64 overflow-y-auto space-y-1 mb-4"
-        style={{ background: '#0a0a0f', borderRadius: 8, padding: 8, border: '1px solid #1a1a2e' }}>
-        {preview.items.map((item) => (
-          <li key={item.index} className="flex items-center gap-2 text-xs py-1 px-2 rounded">
-            <span className="w-14 shrink-0 text-right" style={{ color: IMPORT_STATUS_COLORS[item.status] }}>
-              {IMPORT_STATUS_LABELS[item.status]}
-            </span>
-            <span className="truncate text-gray-300 flex-1">{item.name}</span>
-            {item.reason && <span className="text-gray-600 shrink-0 text-right truncate max-w-56">{item.reason}</span>}
-          </li>
-        ))}
-      </ul>
-      <div className="flex justify-end gap-3">
-        <button onClick={onCancel}
-          className={`px-4 py-2 rounded-lg text-sm font-mono text-gray-400 hover:text-gray-200 hover:bg-white/5 ${FOCUS_RING}`}
-          style={{ border: '1px solid #2a2a3e' }}>Cancel</button>
-        <button onClick={onConfirm} disabled={acceptedCount === 0 || importing}
-          aria-describedby={summaryId}
-          className={`px-4 py-2 rounded-lg text-sm font-mono font-bold disabled:opacity-40 ${FOCUS_RING}`}
-          style={{ background: acceptedCount > 0 ? '#00ff88' : '#333', color: '#0a0a0f' }}>
-          {importing ? 'Importing...' : `Import ${acceptedCount} ${acceptedCount === 1 ? 'Schema' : 'Schemas'}`}
-        </button>
-      </div>
-    </Modal>
+      summary={(
+        <div id={summaryId} className="flex gap-4 mb-4 text-xs">
+          <span style={{ color: '#00ff88' }}>{preview.willAdd} new</span>
+          <span style={{ color: '#00d4ff' }}>{preview.willUpdate} updated</span>
+          <span style={{ color: '#ff4444' }}>{preview.willError} invalid</span>
+          <span className="ml-auto text-gray-500">{preview.total} total</span>
+        </div>
+      )}
+      footer={(
+        <div className="flex justify-end gap-3">
+          <button onClick={onCancel}
+            className={`px-4 py-2 rounded-lg text-sm font-mono text-gray-400 hover:text-gray-200 hover:bg-white/5 ${FOCUS_RING}`}
+            style={{ border: '1px solid #2a2a3e' }}>Cancel</button>
+          <button onClick={onConfirm} disabled={acceptedCount === 0 || importing}
+            aria-describedby={summaryId}
+            className={`px-4 py-2 rounded-lg text-sm font-mono font-bold disabled:opacity-40 ${FOCUS_RING}`}
+            style={{ background: acceptedCount > 0 ? '#00ff88' : '#333', color: '#0a0a0f' }}>
+            {importing ? 'Importing...' : `Import ${acceptedCount} ${acceptedCount === 1 ? 'Schema' : 'Schemas'}`}
+          </button>
+        </div>
+      )}
+    />
   );
 }
 

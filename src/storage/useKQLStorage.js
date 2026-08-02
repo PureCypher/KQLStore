@@ -44,6 +44,10 @@ import { StorageAdapter, API_RETRY_INTERVAL_MS } from './adapter.js';
 const DIFF_FIELDS = [
   'name', 'query', 'description', 'category', 'table', 'tags', 'favorite',
   'parentId', 'parentName',
+  // aiProvenance is content, not bookkeeping: it records what a model authored and the
+  // operator accepted, and an import that silently rewrites that trail is exactly the
+  // kind of overwrite this preview exists to surface.
+  'aiProvenance',
   'queryType', 'severity', 'confidence', 'platform', 'attack', 'dataSources',
   'entityMappings', 'falsePositives', 'references', 'tuningNotes', 'lookback',
   'version', 'lastValidated', 'author', 'license',

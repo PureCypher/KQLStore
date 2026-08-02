@@ -1,0 +1,52 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kqlstore-ai
+  namespace: kqlstore
+  labels:
+    app: kqlstore-ai
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app: kqlstore-ai
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kqlstore
+      ports:
+        - protocol: TCP
+          port: 3001
+  egress:
+    # DNS, to resolve ollama.com.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Ollama Cloud. This CANNOT be pinned to a CIDR — the provider's addresses move — so
+    # it is 443 to everything outside RFC1918 and the cluster's own ranges. That is the
+    # real price of this feature, and it is why this pod has no database, no volume and
+    # no state: what it can reach is broad, so what it can reveal must be narrow.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

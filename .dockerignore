@@ -2,3 +2,8 @@ k8s/
 .git/
 *.md
 .dockerignore
+# A host checkout may carry node_modules under api/ and api-ai/; the Dockerfiles
+# install their own resolved trees with npm ci and a COPY of the host's would clobber
+# them (the api-ai image copies api-ai/ whole, so this matters for it most). The
+# frontend build never copies host node_modules, so excluding them is safe everywhere.
+node_modules/

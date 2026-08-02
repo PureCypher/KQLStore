@@ -51,6 +51,18 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+    # Reach the AI service. Same podSelector shape as the rule above, which means it
+    # carries the same cross-node SNAT hazard (see the header comment in
+    # docs/maintenance/ai-service.md): it permits or denies depending on where the
+    # scheduler puts the pods. Verified allow and deny with pods forced apart before
+    # the UI was allowed to depend on it.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kqlstore-ai
+      ports:
+        - protocol: TCP
+          port: 3001
     # nginx resolves the API service name at request time (see nginx.conf), so it
     # needs DNS. Without this the proxy_pass fails with a resolver timeout.
     - to:

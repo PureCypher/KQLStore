@@ -24,6 +24,9 @@ for the obligation that creates. The examples below assume the local Docker stac
 | `GET` | `/api/schemas/:name` | One table schema |
 | `PUT` | `/api/schemas/:name` | Create or overwrite, keyed on the path name |
 | `DELETE` | `/api/schemas/:name` | Delete |
+| `GET` | `/api/ai/health` | Whether the AI service is up and configured |
+| `POST` | `/api/ai/redact` | Preview what would leave the cluster for a query |
+| `POST` | `/api/ai/chat` | Stream a conversation with the model (NDJSON) |
 
 Records are the flat shape described in [docs/schema.md](schema.md#how-it-is-stored): the v4
 detection block is stored in one JSON column and spread to the top level on the way out.
@@ -255,6 +258,75 @@ $ curl -s -X DELETE http://localhost:8080/api/schemas/SigninLogs
 Deleting a table's schema has no effect on any query — nothing references it. It only removes the
 reference row itself; a query whose `table` field names the now-schema-less table still validates,
 saves and exports exactly as before.
+
+## AI assistant
+
+The three `/api/ai/` routes are served by a **separate service**, `kqlstore-ai`, proxied by nginx
+at `/api/ai/` — they are not routes of the API pod, which keeps its `egress: []` and never touches
+the network. The AI service holds no database, no volume and no session state; the SPA replays
+conversation history each turn. See [docs/ai-assist.md](ai-assist.md) for the data-flow and its
+trade-offs, and [docs/maintenance/ai-service.md](maintenance/ai-service.md) for operations.
+
+### `GET /api/ai/health`
+
+```console
+$ curl -s http://localhost:8080/api/ai/health
+{"status":"ok","model":"deepseek-v4-flash:cloud","configured":false}
+```
+
+`configured` reports whether an API key is present — never what it is, so a probe cannot leak the
+credential. `model` is the configured model (or the default). The SPA probes this once on mount and
+hides the assist toggle when the service is unreachable, so scaling the service to zero degrades to
+manual editing rather than erroring.
+
+### `POST /api/ai/redact`
+
+Body: `{ "fields": { "name": …, "description": …, "query": … } }`. Answers what a send would do
+before anything leaves the cluster.
+
+```console
+$ curl -s http://localhost:8080/api/ai/redact \
+  -H 'Content-Type: application/json' \
+  -d '{"fields":{"query":"DeviceIP == \"10.1.2.3\""}}'
+{"redacted":{"query":"DeviceIP == \"<PRIVATE_IPV4_1>\""},"applied":[{"rule":"Private IPv4","value":"10.1.2.3","marker":"<PRIVATE_IPV4_1>"}],"blocked":false}
+```
+
+`applied` is the marker mapping, returned so the client holds it; it never goes upstream. A request
+carrying a credential is **refused** with `422` — the response names the rule that fired, never the
+matched value:
+
+```console
+$ curl -s http://localhost:8080/api/ai/redact -H 'Content-Type: application/json' \
+  -d '{"fields":{"query":"let k = \"AKIAIOSFODNN7EXAMPLE\";"}}'
+{"blocked":true,"secrets":[{"rule":"AWS access key id","field":"query"}],"error":"This query appears to contain a credential. Remove it before using AI assistance."}
+```
+
+### `POST /api/ai/chat`
+
+Body:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "make this detect Okta" }],
+  "schemas": [{ "name": "OktaLogs", "columns": [{ "name": "eventType", "type": "string" }], "notes": "" }],
+  "draft": { "name": "Entra risky sign-in", "description": "…", "query": "…" },
+  "allowVerbatim": false
+}
+```
+
+The draft is redacted before it reaches the model (unless `allowVerbatim`), and the model's
+proposal is un-redacted before it comes back. A credential anywhere is refused with `422` even
+under the override. The response is NDJSON — text chunks first, then either a `proposal` or an
+`error` line:
+
+```text
+{"type":"text","value":"Here is a rewrite that keys on the Okta eventType…"}
+{"type":"proposal","fields":{"name":"Okta risky sign-in","attack":{"tactics":["initial-access"]}}}
+```
+
+An upstream failure is always `{"type":"error","value":"The model service failed."}` — the service
+never relays an Ollama error body, because Ollama can echo the request in one, and the request
+contains query text.
 
 ## Errors
 

@@ -1,17 +1,15 @@
-import React, { useState, useEffect, useMemo, useId, useRef, useCallback } from 'react';
-import { Search, Plus, Trash2, Download, Upload, X, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useId, useCallback } from 'react';
+import { Search, Plus, Trash2, Download, Upload, AlertTriangle } from 'lucide-react';
 import { parseGetSchema } from '../domain/getschema.js';
 import { StorageAdapter } from '../storage/adapter.js';
-import { safeJsonParse } from '../lib/json.js';
 import { useToast } from '../context/toast.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { Modal } from './Modal.jsx';
+import { useSchemaImportExport, SchemaImportModal } from './SchemaImportExport.jsx';
 import { FOCUS_RING } from './a11y.jsx';
 
 // ---------------------------------------------------------------------------
-// Schema store: a searchable list of table_schemas rows, a paste box that runs
-// parseGetSchema before anything is sent to the API, and JSON export/import for the
-// whole set.
+// Schema store view: the searchable list and the name/paste/notes form.
 //
 // There is no separate "edit columns" form. PUT /api/schemas/:name is an upsert keyed
 // on name, so re-saving an existing row IS the edit: selecting a row from the list
@@ -22,12 +20,8 @@ import { FOCUS_RING } from './a11y.jsx';
 // only upsert-by-name, and a text field that silently created a second row under a
 // typo'd name would be worse than no rename at all.
 //
-// Import intentionally does not reuse ImportPreviewModal.jsx: that component reads
-// `confirmImport`/`queries` off AppContext and diffs against the query domain via
-// planImport, neither of which applies to a table_schemas row, and it is out of scope
-// for this task to rework. What is reused is the item shape it renders —
-// { index, name, status, reason } — and the same review-before-commit shape, built
-// locally against StorageAdapter.saveSchema instead.
+// The third responsibility — JSON export/import — lives in SchemaImportExport.jsx, a
+// self-contained unit (state, handlers, the review modal) this view calls into.
 //
 // nameInput/pasteText/notesInput are owned by App, not this component: SchemaView is
 // unmounted whenever `view !== 'schemas'` (App keeps exactly one tabpanel in the DOM at a
@@ -63,17 +57,6 @@ function describePasteHint(text, parseResult, selectedSchema) {
     return `Keeping the stored ${columnWord(selectedSchema.columns.length)}. Paste new getschema output to replace them.`;
   }
   return 'Paste getschema output to add columns.';
-}
-
-/** Build the accepted-or-rejected preview for one row of an imported schema file. */
-function planImportRow(raw, index, existingNames) {
-  const name = raw && typeof raw.name === 'string' ? raw.name.trim() : '';
-  if (!name) return { index, name: '(unnamed)', status: 'error', reason: '"name" is required' };
-  if (!Array.isArray(raw.columns)) return { index, name, status: 'error', reason: '"columns" must be an array' };
-  const entry = { name, columns: raw.columns, notes: typeof raw.notes === 'string' ? raw.notes : '' };
-  return existingNames.has(name)
-    ? { index, name, status: 'update', reason: 'Overwrites the stored schema', entry }
-    : { index, name, status: 'add', reason: null, entry };
 }
 
 function DeleteSchemaModal({ name, deleting, onCancel, onConfirm }) {
@@ -133,61 +116,6 @@ function SaveCollisionModal({ name, existing, saving, onCancel, onConfirm }) {
   );
 }
 
-const IMPORT_STATUS_COLORS = { add: '#00ff88', update: '#00d4ff', error: '#ff4444' };
-const IMPORT_STATUS_LABELS = { add: 'New', update: 'Update', error: 'Invalid' };
-
-function SchemaImportModal({ preview, importing, onCancel, onConfirm }) {
-  const titleId = useId();
-  const summaryId = useId();
-  const acceptedCount = preview.willAdd + preview.willUpdate;
-  return (
-    <Modal
-      labelledBy={titleId}
-      onClose={onCancel}
-      backdropClassName="z-[80] items-start justify-center pt-8 pb-8 overflow-y-auto"
-      className="rounded-xl p-6 font-mono w-full max-w-xl mx-4"
-      style={{ background: '#12121a', border: '1px solid #2a2a3e' }}
-    >
-      <div className="flex justify-between items-center mb-4">
-        <h2 id={titleId} className="text-lg font-bold" style={{ color: '#00ff88' }}>Import Schemas</h2>
-        <button onClick={onCancel} className={`p-1 rounded hover:bg-white/10 ${FOCUS_RING}`}
-          aria-label="Close import preview" title="Close">
-          <X size={16} className="text-gray-400" aria-hidden="true" />
-        </button>
-      </div>
-      <div id={summaryId} className="flex gap-4 mb-4 text-xs">
-        <span style={{ color: '#00ff88' }}>{preview.willAdd} new</span>
-        <span style={{ color: '#00d4ff' }}>{preview.willUpdate} updated</span>
-        <span style={{ color: '#ff4444' }}>{preview.willError} invalid</span>
-        <span className="ml-auto text-gray-500">{preview.total} total</span>
-      </div>
-      <ul aria-label="Schemas in this import" className="max-h-64 overflow-y-auto space-y-1 mb-4"
-        style={{ background: '#0a0a0f', borderRadius: 8, padding: 8, border: '1px solid #1a1a2e' }}>
-        {preview.items.map((item) => (
-          <li key={item.index} className="flex items-center gap-2 text-xs py-1 px-2 rounded">
-            <span className="w-14 shrink-0 text-right" style={{ color: IMPORT_STATUS_COLORS[item.status] }}>
-              {IMPORT_STATUS_LABELS[item.status]}
-            </span>
-            <span className="truncate text-gray-300 flex-1">{item.name}</span>
-            {item.reason && <span className="text-gray-600 shrink-0 text-right truncate max-w-56">{item.reason}</span>}
-          </li>
-        ))}
-      </ul>
-      <div className="flex justify-end gap-3">
-        <button onClick={onCancel}
-          className={`px-4 py-2 rounded-lg text-sm font-mono text-gray-400 hover:text-gray-200 hover:bg-white/5 ${FOCUS_RING}`}
-          style={{ border: '1px solid #2a2a3e' }}>Cancel</button>
-        <button onClick={onConfirm} disabled={acceptedCount === 0 || importing}
-          aria-describedby={summaryId}
-          className={`px-4 py-2 rounded-lg text-sm font-mono font-bold disabled:opacity-40 ${FOCUS_RING}`}
-          style={{ background: acceptedCount > 0 ? '#00ff88' : '#333', color: '#0a0a0f' }}>
-          {importing ? 'Importing...' : `Import ${acceptedCount} ${acceptedCount === 1 ? 'Schema' : 'Schemas'}`}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
 function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInput, setNotesInput }) {
   const { addToast } = useToast();
   const [schemas, setSchemas] = useState([]);
@@ -204,9 +132,6 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [collisionTarget, setCollisionTarget] = useState(null);
-  const [importPreview, setImportPreview] = useState(null);
-  const [importing, setImporting] = useState(false);
-  const fileInputRef = useRef(null);
   const baseId = useId();
   const ids = {
     search: `${baseId}-search`,
@@ -228,6 +153,13 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Export/import is its own unit — state, handlers and the review modal live in
+  // SchemaImportExport.jsx; this view only calls into it and renders the modal.
+  const {
+    importPreview, importing, fileInputRef,
+    handleExport, handleImportFile, confirmImport, dismissImport,
+  } = useSchemaImportExport({ schemas, load, addToast, setActionError });
 
   const selectedSchema = useMemo(
     () => (selectedName ? schemas.find((s) => s.name === selectedName) || null : null),
@@ -333,95 +265,6 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
     }
     setDeleting(false);
     setDeleteTarget(null);
-  };
-
-  const handleExport = async () => {
-    try {
-      const data = await StorageAdapter.fetchSchemas();
-      const blob = new Blob([JSON.stringify({ schemas: data }, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `kql-store-schemas-${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      addToast(`Exported ${data.length} schemas`, 'success');
-    } catch (e) {
-      addToast(`Failed to export schemas: ${e.message}`, 'error');
-    }
-  };
-
-  const handleImportFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsed = safeJsonParse(text);
-      if (!parsed.ok) {
-        addToast('Failed to import -- invalid JSON: ' + parsed.error, 'error');
-        e.target.value = '';
-        return;
-      }
-      let incoming = parsed.data;
-      if (incoming && typeof incoming === 'object' && !Array.isArray(incoming) && Array.isArray(incoming.schemas)) {
-        incoming = incoming.schemas;
-      }
-      if (!Array.isArray(incoming)) {
-        addToast('Failed to import -- expected an array of schemas', 'error');
-        e.target.value = '';
-        return;
-      }
-      const existingNames = new Set(schemas.map((s) => s.name));
-      const items = incoming.map((raw, index) => planImportRow(raw || {}, index, existingNames));
-      setImportPreview({
-        items,
-        willAdd: items.filter((i) => i.status === 'add').length,
-        willUpdate: items.filter((i) => i.status === 'update').length,
-        willError: items.filter((i) => i.status === 'error').length,
-        total: items.length,
-      });
-    } catch {
-      addToast('Failed to read import file', 'error');
-    }
-    e.target.value = '';
-  };
-
-  const confirmImport = async () => {
-    if (!importPreview) return;
-    setImporting(true);
-    setActionError(null);
-    const accepted = importPreview.items.filter((i) => i.status === 'add' || i.status === 'update');
-    let succeeded = 0;
-    let failed = 0;
-    for (const item of accepted) {
-      try {
-        // Awaited one at a time (not Promise.all) so a partial failure still leaves the
-        // rows that already landed saved, rather than the batch racing and losing track
-        // of which upserts actually committed.
-        await StorageAdapter.saveSchema(item.entry.name, {
-          columns: item.entry.columns, notes: item.entry.notes, source: 'import',
-        });
-        succeeded++;
-      } catch {
-        failed++;
-      }
-    }
-    if (succeeded > 0) await load();
-    if (failed > 0) {
-      // At least one row failed to write, which means the store now holds less than the
-      // preview promised. That is durable, not a toast — see actionError's declaration.
-      const parts = [`${failed} of ${accepted.length} schemas failed to import`];
-      if (succeeded) parts.push(`${succeeded} succeeded`);
-      setActionError(parts.join(', '));
-    } else {
-      // Nothing failed to write — the invalid rows below were never attempted, and the
-      // preview modal already showed them before the user confirmed, so a toast is enough.
-      const parts = [`${succeeded} imported`];
-      if (importPreview.willError) parts.push(`${importPreview.willError} invalid, skipped`);
-      addToast(`Import: ${parts.join(', ')}`, importPreview.willError ? 'error' : 'success');
-    }
-    setImporting(false);
-    setImportPreview(null);
   };
 
   const inputCls = `w-full px-3 py-2 rounded-lg font-mono text-sm text-gray-200 outline-hidden focus:ring-1 focus:ring-[#00ff88] ${FOCUS_RING}`;
@@ -550,7 +393,7 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
           onCancel={() => setCollisionTarget(null)} onConfirm={handleCollisionConfirm} />
       )}
       {importPreview && (
-        <SchemaImportModal preview={importPreview} importing={importing} onCancel={() => setImportPreview(null)} onConfirm={confirmImport} />
+        <SchemaImportModal preview={importPreview} importing={importing} onCancel={dismissImport} onConfirm={confirmImport} />
       )}
     </div>
   );

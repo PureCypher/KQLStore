@@ -22,6 +22,10 @@ resources:
   # Frontend
   - deployment.yaml
   - service.yaml
+  # AI assistant — the stateless chat proxy. No PVC, no database, no volume.
+  - ai-deployment.yaml
+  - ai-service.yaml
+  - ai-networkpolicy.yaml
   # Everything else: network rules and the nightly backups. Each CronJob carries its own
   # NetworkPolicy alongside it — deny-all for the local job, egress-to-the-endpoint for
   # the off-node one.

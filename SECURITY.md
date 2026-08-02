@@ -92,6 +92,32 @@ unauthenticated database on your network, and the fault is not in the code.
   additionally cap `NODE_OPTIONS=--max-old-space-size` below the memory limit so V8 collects
   rather than being OOMKilled.
 
+### The AI assistant: a deliberate trade, stated plainly
+
+AI-assisted authoring adds a third Deployment, `kqlstore-ai`, and with it the one genuinely new
+exposure in this system: **this pod is allowed to reach the public internet.** Its egress is "443
+to anything outside RFC1918", because Ollama Cloud's addresses move and cannot be pinned to a CIDR.
+That is meaningfully weaker than `egress: []`, and it is the whole reason the trade is shaped the
+way it is:
+
+- **The pod that holds the data holds no network.** `kqlstore-api` keeps `egress: []` — a
+  compromised dependency still has nowhere to send the store. The AI pod never mounts the PVC and
+  never loads a database driver (asserted by its test suite).
+- **The AI pod holds nothing to leak.** No database, no volume, no session state, no transcripts.
+  Conversation history lives in browser state and is replayed each turn. The only record kept is a
+  bounded provenance entry on the saved query naming the fields the operator **accepted**.
+- **Query text leaves the cluster redacted by default**, with a per-request override for
+  disclosures and **no** override for credentials — a request carrying a secret is refused outright
+  and the response names the rule, never the matched value.
+- **Model output is never applied directly.** Every proposed field runs through the same validator
+  the save path uses and is reviewed field by field; nothing is auto-applied, including the KQL.
+
+The key for Ollama Cloud lives in a Secret mounted only into `kqlstore-ai` and is never returned,
+logged, or echoed. For the operational details — egress, key rotation, the cross-node NetworkPolicy
+hazard, and how to disable the feature by scaling to zero — see
+[docs/maintenance/ai-service.md](docs/maintenance/ai-service.md), and for the full data flow see
+[docs/ai-assist.md](docs/ai-assist.md).
+
 ### Application controls
 
 - **Parameterised SQL, everywhere.** Every statement in `api/routes/` is a `better-sqlite3`

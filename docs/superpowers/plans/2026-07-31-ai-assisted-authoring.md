@@ -18,9 +18,33 @@
 - **`k8s/api-networkpolicy.yaml` must keep `egress: []` on `kqlstore-api`.** If any task appears to need egress there, the task is wrong.
 - **`nginx.conf` must keep `connect-src 'self'`** in its Content-Security-Policy. The browser never talks to a third-party origin.
 - The AI service never imports `api/db.js` and never mounts the PVC. It receives text and returns text.
-- **Ollama Cloud does not support structured outputs** (verified 2026-07-31). Do not pass a `format` JSON schema and expect it to be honoured. Structured data comes back via tool calling and is then validated.
+- **Ollama Cloud does not support structured outputs** (verified 2026-07-31, re-verified 2026-08-02). Do not pass a `format` JSON schema and expect it to be honoured. Structured data comes back via tool calling and is then validated.
 - The model is `deepseek-v4-flash:cloud`, 1M context, capabilities `tools thinking cloud`.
 - `OLLAMA_API_KEY` comes from a Secret and is read from `process.env` at request time. It must never appear in a response body, a log line, or an error message.
+
+### Provider facts (re-verified 2026-08-02)
+
+Re-checked against current docs before executing. All four claims in the original plan hold;
+the fourth was a gap and is now filled.
+
+| Claim | Verified 2026-08-02 | Source |
+| --- | --- | --- |
+| Cloud does not support structured outputs | **Holds.** Docs still say "Ollama's Cloud currently does not support structured outputs." GitHub issues #12362 (schema ignored), #13967 (oneOf/anyOf schemas get 400 even for tools), ollama-js #264 remain open. The validation gate stays load-bearing. | docs.ollama.com/capabilities/structured-outputs |
+| Capabilities `tools thinking cloud` | **Holds.** Model page lists exactly those three tags; three reasoning modes (none / thinking / max thinking). | ollama.com/library/deepseek-v4-flash |
+| 1M-token context | **Holds.** 1,048,576 tokens. Schema selection is an optimisation, not a requirement. | ollama.com/library/deepseek-v4-flash |
+| Pricing / rate limits / retention | **Previously unrecorded; now filled.** Usage is billed by GPU time (not tokens) against usage-level tiers; limits reset on 5-hour session and 7-day weekly clocks; concurrency Free=1, Pro=3, Max=10, overflow queues then rejects (429). Free tier is for light usage — deepseek-v4-flash:cloud is a real consumer, budget it. Retention is a policy promise, not an architectural one: "never logged or trained on", "processed transiently", NVIDIA zero-retention contracts. That is exactly why redaction-on-by-default is load-bearing rather than a nicety. | ollama.com/pricing |
+
+Caveats that shaped the design but are not part of the four claims:
+
+- Tool-call schemas using `oneOf`/`anyOf` return 400 on Cloud (#13967). The `propose_query`
+  tool in `api-ai/lib/ollama.js` uses only plain JSON Schema (no `oneOf`/`anyOf`), which is
+  what keeps it callable.
+- GitHub issue #14279 reports some third-party-hosted Cloud models may route to providers
+  that retain prompts. The redaction default and the `kqlstore-ai` isolation (no PVC, no
+  database) are the controls that make this tolerable for detection logic.
+- A 429 (rate limit) is a real response from the Cloud API. The chat route treats any
+  non-2xx as `{type:'error', value:'The model service failed.'}` without echoing the body,
+  which covers it.
 - Coverage thresholds apply to `src/domain/**` and `src/lib/**`: lines 80, functions 80, branches 75.
 - Commit after every task. Conventional commit format.
 
@@ -1781,14 +1805,14 @@ git commit -m "docs: document AI-assisted authoring, its data flow and its trade
 
 ## Definition of done
 
-- [ ] `cd api && node --test "test/**/*.test.js"` passes
-- [ ] `cd api-ai && node --test "test/**/*.test.js"` passes
-- [ ] `npm run test:coverage`, `npm run lint`, `npm run build` all pass
-- [ ] `grep -c "connect-src 'self'" nginx.conf` returns 1
-- [ ] `kqlstore-api`'s NetworkPolicy still reads `egress: []`
-- [ ] The NetworkPolicy allow and deny paths were verified with the pods on **different nodes**
-- [ ] A query containing an AWS key is refused, and the key does not appear in the response
-- [ ] A query containing a watchlist name reaches the model as a typed marker, and the marker is restored in the proposal
-- [ ] An invalid ATT&CK technique arrives pre-rejected with a readable reason
-- [ ] Scaling `kqlstore-ai` to 0 leaves forking and manual editing fully working, with no assist toggle
-- [ ] Provenance on a saved query lists only the fields the operator accepted
+- [x] `cd api && node --test "test/**/*.test.js"` passes (114)
+- [x] `cd api-ai && node --test "test/**/*.test.js"` passes (20)
+- [x] `npm run test:coverage`, `npm run lint`, `npm run build` all pass (529, coverage 94.6%)
+- [x] `grep -c "connect-src 'self'" nginx.conf` returns 1
+- [x] `kqlstore-api`'s NetworkPolicy still reads `egress: []`
+- [ ] The NetworkPolicy allow and deny paths were verified with the pods on **different nodes** — NOT VERIFIED: no cluster access (kubeconfig is an empty stub). Manifests written and validated by CI; the cross-node probe is documented as a re-test procedure in docs/maintenance/ai-service.md and must be run before the UI depends on the AI path.
+- [x] A query containing an AWS key is refused, and the key does not appear in the response (redact-route and chat suites)
+- [x] A query containing a watchlist name reaches the model as a typed marker, and the marker is restored in the proposal (chat suite)
+- [x] An invalid ATT&CK technique arrives pre-rejected with a readable reason (proposal suite)
+- [ ] Scaling `kqlstore-ai` to 0 leaves forking and manual editing fully working, with no assist toggle — the toggle-visibility half is verified at the component boundary (editorState suite); the live-cluster check could not be run (no cluster access).
+- [x] Provenance on a saved query lists only the fields the operator accepted (buildProvenanceRecord suite + API provenance suite)

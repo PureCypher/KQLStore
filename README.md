@@ -27,10 +27,11 @@ publishing it would say as much about what it does not cover as what it does. Th
 
 ## Architecture
 
-Two images, two Deployments. The SPA is bundled at image build time by esbuild and Tailwind and
-served as static assets by nginx; nginx also reverse-proxies `/api/` to an Express service that
-owns a SQLite database on a PersistentVolumeClaim. Nothing is fetched from a third-party origin
-at runtime, which is what makes the strict Content-Security-Policy in `nginx.conf` possible.
+Three images, three Deployments. The SPA is bundled at image build time by esbuild and Tailwind and
+served as static assets by nginx; nginx reverse-proxies `/api/` to an Express service that owns a
+SQLite database on a PersistentVolumeClaim, and `/api/ai/` to a stateless chat proxy that talks to
+Ollama Cloud. Nothing is fetched from a third-party origin by the browser at runtime, which is what
+makes the strict Content-Security-Policy in `nginx.conf` possible.
 
 ```
                  Cloudflare Access   (authentication happens here, at the edge)
@@ -41,19 +42,22 @@ at runtime, which is what makes the strict Content-Security-Policy in `nginx.con
   │   nginx :8080                              │
   │     /       → index.html, app.js, app.css  │  static bundle
   │     /api/   → proxy_pass ──────────────┐   │
-  └────────────────────────────────────────┼───┘
-                                           │  ClusterIP, NetworkPolicy-restricted
-                                           ▼
-  ┌────────────────────────────────────────────┐
-  │ Deployment: kqlstore-api       (1 replica) │
-  │   Express :3000 → better-sqlite3           │
-  │                     /data/kqlstore.db      │
-  └───────────────────────┬────────────────────┘
-                          │
-          ┌───────────────┴────────────────┐
-          ▼                                ▼
-  PVC kqlstore-api-data          CronJob kqlstore-api-backup
-  (1Gi, ReadWriteOnce)           nightly → PVC kqlstore-api-backup
+  │     /api/ai/→ proxy_pass ──────────┐   │   │
+  └────────────────────────────────────┼───┼───┘
+                                       │   │
+              ┌────────────────────────┘   └──────────┐
+              ▼                                       ▼
+  ┌────────────────────────────┐      ┌────────────────────────────────┐
+  │ Deployment: kqlstore-ai    │      │ Deployment: kqlstore-api       │
+  │   Express :3001            │      │   Express :3000 → better-sqlite3│
+  │   no volumes, no state     │      │                     /data/...  │
+  │   egress: ollama.com:443   │      │   egress: []      (UNCHANGED)  │
+  └─────────────┬──────────────┘      └───────────────────────┬────────┘
+                ▼                                             │
+       Ollama Cloud                      ┌───────────────────┴───────────────┐
+       deepseek-v4-flash:cloud           ▼                                   ▼
+                                 PVC kqlstore-api-data            CronJob kqlstore-api-backup
+                                 (1Gi, ReadWriteOnce)             nightly → PVC kqlstore-api-backup
 ```
 
 The API Deployment is single-replica with a `Recreate` strategy and **must never be scaled above
@@ -65,6 +69,14 @@ tolerates exactly one writer. Scaling out means replacing SQLite, not adding rep
 same PVC as `queries`. No new Deployment, Service, or claim was added for it; the schema store
 inherits the single-writer constraint above for the same reason the query store does.
 
+`kqlstore-ai` exists to keep that egress story intact. It is a third Deployment with no PVC, no
+database and no session state; its whole contract is accept a request from nginx, redact the query,
+forward to Ollama Cloud, return the response. The pod that holds the store still has `egress: []`,
+and the browser still talks only to its own origin. What leaves the cluster is redacted by default
+with a per-request override, nothing is applied without human review, and only a bounded provenance
+record is kept — see [docs/ai-assist.md](docs/ai-assist.md) for the full data flow and its
+trade-offs.
+
 | Path | What it is |
 | --- | --- |
 | `src/` | The SPA — `components/`, `domain/` (highlighter, linter, validation, migration), `export/`, `storage/`, `hooks/`, `lib/`, `context/` |
@@ -73,6 +85,7 @@ inherits the single-writer constraint above for the same reason the query store 
 | `nginx.conf` | Static serving, `/api/` proxy, CSP and security headers |
 | `Dockerfile` | esbuild + Tailwind build stage → `nginx:1.31-alpine` runtime |
 | `api/` | Express app, SQLite schema, request validation, `api/test/` |
+| `api-ai/` | The stateless chat proxy — Express, redaction, the Ollama route, `api-ai/test/` |
 | `k8s/` | Namespace, Deployments, Services, PVCs, NetworkPolicies, backup CronJob |
 | `docs/` | The reference pages listed at the [end of this file](#documentation) |
 | `docs/local/` | Configuration used only when running outside Kubernetes |
@@ -240,6 +253,21 @@ filter, the table picker and the linter all still read the hardcoded lists in
 [`src/constants.js`](src/constants.js), unchanged by this feature. Editing or deleting a schema
 changes only what the Schemas tab shows. What the store is for, the three paste formats it accepts,
 and why that separation is deliberate: [docs/schemas.md](docs/schemas.md).
+
+## AI-assisted authoring
+
+An analyst forks a query, opens the editor's **Assist with AI** toggle, and rewrites the KQL and
+its metadata in conversation with a model on Ollama Cloud — with the stored table schemas as ground
+truth for what columns exist. Every proposal runs through the same validator the save path uses and
+is reviewed field by field before anything is applied; nothing is auto-applied, including the KQL.
+A save after accepting proposals records a bounded provenance entry naming the model and the fields
+the operator accepted.
+
+**The pod that holds the store stays airgapped.** The assistant is a separate Deployment with no
+database, no volume and no state; query text leaves the cluster redacted by default with a
+per-request override, and a credential is refused outright. No transcripts are retained. Scaling the
+service to zero hides the toggle and leaves everything else working — see
+[docs/ai-assist.md](docs/ai-assist.md).
 
 ## Exports
 

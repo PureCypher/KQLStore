@@ -42,6 +42,22 @@ function parseMetadata(raw) {
   }
 }
 
+/**
+ * Parse the provenance column defensively, same reasoning as parseTags: one malformed
+ * row must not take down the list. Entries that are not objects are dropped rather than
+ * surfaced — a provenance list that cannot be read is not worth blocking the store for.
+ */
+function parseProvenance(raw) {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((e) => e && typeof e === 'object' && !Array.isArray(e))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Convert a DB row to the frontend-friendly shape. */
 function toFrontend(row) {
   return {
@@ -57,12 +73,13 @@ function toFrontend(row) {
     // Spread the v4 detection block back to the top level, which is the shape the SPA's
     // validateQuery works in. Stored nested so it is one additive column, not seventeen.
     ...parseMetadata(row.metadata),
-    // Lineage is assigned AFTER the spread on purpose. collectMetadata merges body.metadata
-    // wholesale, so a caller can put a parentId inside it; if these were above the spread,
-    // that smuggled value would overwrite the real column and let anyone fake a fork badge.
-    // The column is the truth, so it is written last.
+    // Lineage and provenance are assigned AFTER the spread on purpose. collectMetadata
+    // merges body.metadata wholesale, so a caller can put a parentId or an aiProvenance
+    // inside it; if these were above the spread, that smuggled value would overwrite the
+    // real column. The column is the truth, so it is written last.
     parentId: row.parent_id ?? null,
     parentName: row.parent_name ?? '',
+    aiProvenance: parseProvenance(row.ai_provenance),
     created: row.created,
     updated: row.updated,
   };
@@ -180,8 +197,8 @@ router.post('/import', (req, res, next) => {
 
     const selectStored = db.prepare('SELECT updated, created, usage_count FROM queries WHERE id = ?');
     const insert = db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, created, updated)
-      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @metadata, @parent_id, @parent_name, @created, @updated)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, ai_provenance, created, updated)
+      VALUES (@id, @name, @query, @description, @category, @table_name, @tags, @favorite, @usage_count, @metadata, @parent_id, @parent_name, @ai_provenance, @created, @updated)
     `);
     const update = db.prepare(`
       UPDATE queries
@@ -196,6 +213,7 @@ router.post('/import', (req, res, next) => {
           metadata    = @metadata,
           parent_id   = @parent_id,
           parent_name = @parent_name,
+          ai_provenance = @ai_provenance,
           updated     = @updated
       WHERE id = @id
     `);
@@ -218,6 +236,9 @@ router.post('/import', (req, res, next) => {
           metadata: JSON.stringify(item.metadata || {}),
           parent_id: item.parentId ?? null,
           parent_name: item.parentName ?? '',
+          ai_provenance: item.aiProvenance !== undefined
+            ? JSON.stringify(item.aiProvenance)
+            : '[]',
           created: item.created || now,
           updated: item.updated || now,
         };
@@ -294,14 +315,14 @@ router.post('/', (req, res, next) => {
   try {
     const v = validateQueryPayload(req.body, { partial: false });
     const { id: suppliedId } = validateSyncFields(req.body);
-    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName } = v;
+    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName, aiProvenance } = v;
 
     const now = new Date().toISOString();
     const id = suppliedId || uuidv4();
 
     db.prepare(`
-      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, created, updated)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO queries (id, name, query, description, category, table_name, tags, favorite, usage_count, metadata, parent_id, parent_name, ai_provenance, created, updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       name,
@@ -315,6 +336,7 @@ router.post('/', (req, res, next) => {
       JSON.stringify(v.metadata || {}),
       parentId ?? null,
       parentName ?? '',
+      aiProvenance !== undefined ? aiProvenance : '[]',
       now,
       now,
     );
@@ -359,7 +381,7 @@ router.put('/:id', (req, res, next) => {
     }
 
     const v = validateQueryPayload(req.body, { partial: true });
-    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName } = v;
+    const { name, query, description, category, table, tags, favorite, usageCount, parentId, parentName, aiProvenance } = v;
     const now = new Date().toISOString();
 
     db.prepare(`
@@ -375,6 +397,7 @@ router.put('/:id', (req, res, next) => {
           metadata    = ?,
           parent_id   = ?,
           parent_name = ?,
+          ai_provenance = ?,
           updated     = ?
       WHERE id = ?
     `).run(
@@ -391,6 +414,9 @@ router.put('/:id', (req, res, next) => {
       // to the stored value rather than to null.
       parentId ?? existing.parent_id ?? null,
       parentName ?? existing.parent_name ?? '',
+      // Provenance is append-only from the SPA's side, so an absent value here must not
+      // wipe the stored trail either — same coalesce-as-absent rule as lineage.
+      aiProvenance !== undefined ? aiProvenance : existing.ai_provenance,
       now,
       req.params.id,
     );

@@ -227,6 +227,77 @@ const StorageAdapter = {
     }
   },
 
+  // ---- AI assistant methods ----
+
+  /**
+   * Redaction preview for one request. Answers "what would leave the cluster, and is it
+   * blocked?"
+   *
+   * A 422 is NOT an error here — it is the answer. The service returns 422 with
+   * { blocked: true, secrets: [...] } when the query carries a credential, and that body
+   * is exactly what RedactionPreview needs to name the rules that fired and offer no way
+   * through. Throwing it (which this did originally) collapsed the whole blocked state
+   * into a generic error line, so the operator was told "something went wrong" instead of
+   * "this contains a credential, here is which rule matched". Every other non-ok status
+   * still throws, because those really are failures.
+   */
+  async aiRedact(fields) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/ai/redact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields }),
+        credentials: 'include',
+      });
+      if (!res.ok && res.status !== 422) throw await apiError(res);
+      const data = await res.json();
+      operationLog.add({ type: 'API_AI_REDACT', key: 'redact', success: true, latencyMs: Date.now() - start, blocked: data.blocked === true });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_AI_REDACT', key: 'redact', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  /**
+   * AI health probe — the feature-detection call. The SPA shows the assist toggle only
+   * when the service answers, so scaling kqlstore-ai to zero degrades to manual editing
+   * rather than erroring. A non-ok or missing service is the normal state, not an error,
+   * so this resolves to `false` instead of throwing.
+   */
+  async aiHealth() {
+    try {
+      const res = await fetch(`${API_BASE}/ai/health`, { credentials: 'include' });
+      if (!res.ok) return false;
+      const data = await res.json();
+      operationLog.add({ type: 'API_AI_HEALTH', key: 'health', success: true, latencyMs: 0 });
+      // The full body, not just a boolean: the caller needs the model name for the
+      // provenance record, and false covers "unreachable" and "not ok" alike.
+      return data && data.status === 'ok' ? data : false;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Chat. Returns the raw Response so the caller can read the NDJSON stream itself —
+   * this endpoint does not answer with a single JSON document, so it cannot be parsed
+   * here the way the other methods parse theirs. Callers check res.ok and handle a
+   * 422/503 body themselves.
+   */
+  async aiChat(body) {
+    const start = Date.now();
+    const res = await fetch(`${API_BASE}/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      credentials: 'include',
+    });
+    operationLog.add({ type: 'API_AI_CHAT', key: 'chat', success: true, latencyMs: Date.now() - start });
+    return res;
+  },
+
   // ---- localStorage cache methods (fast path + offline) ----
 
   getCachedData() {

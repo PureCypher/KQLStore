@@ -208,7 +208,56 @@ function validateQueryPayload(body, { partial = false } = {}) {
   const metadata = checkMetadata(collectMetadata(body));
   if (metadata !== undefined) out.metadata = metadata;
 
+  // AI provenance, kept OUT of collectMetadata: it is not detection metadata and must
+  // never ride along in the exported v4 document.
+  const aiProvenance = validateProvenance(body.aiProvenance);
+  if (aiProvenance !== undefined) out.aiProvenance = aiProvenance;
+
   return out;
+}
+
+const PROVENANCE_REDACTIONS = ['applied', 'overridden'];
+const PROVENANCE_MAX = 10;
+
+/**
+ * Validate the AI provenance list. Bounded rather than free-form: a provenance record
+ * is an audit trail, and an audit trail with a 2000-character model name or a 30-field
+ * list is one nobody reads. The list keeps the 10 most recent entries (oldest dropped),
+ * and each entry's instruction is truncated rather than rejected — the instruction is
+ * the operator's own words and losing them to a strict cap would reject a save.
+ * Returns a JSON string, ready to bind.
+ */
+function validateProvenance(value) {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw badRequest('"aiProvenance" must be an array');
+
+  const out = [];
+  for (const entry of value.slice(-PROVENANCE_MAX)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw badRequest('every aiProvenance entry must be an object');
+    }
+    if (typeof entry.model !== 'string' || entry.model.length === 0 || entry.model.length > 100) {
+      throw badRequest('aiProvenance "model" must be a string of 1-100 characters');
+    }
+    if (typeof entry.generatedAt !== 'string' || entry.generatedAt.length > 64) {
+      throw badRequest('aiProvenance "generatedAt" must be a string of at most 64 characters');
+    }
+    if (!PROVENANCE_REDACTIONS.includes(entry.redaction)) {
+      throw badRequest(`aiProvenance "redaction" must be one of: ${PROVENANCE_REDACTIONS.join(', ')}`);
+    }
+    const fields = Array.isArray(entry.fields) ? entry.fields : [];
+    if (fields.length > 20 || fields.some((f) => typeof f !== 'string')) {
+      throw badRequest('aiProvenance "fields" must be an array of at most 20 strings');
+    }
+    out.push({
+      model: entry.model,
+      generatedAt: entry.generatedAt,
+      redaction: entry.redaction,
+      instruction: typeof entry.instruction === 'string' ? entry.instruction.slice(0, 1000) : '',
+      fields,
+    });
+  }
+  return JSON.stringify(out);
 }
 
 /**
@@ -343,6 +392,7 @@ module.exports = {
   validateExpectedUpdated,
   validatePagination,
   validateSchemaPayload,
+  validateProvenance,
   badRequest,
   CATEGORIES,
   IMPORT_MODES,

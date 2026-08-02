@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kqlstore-ai
+  namespace: kqlstore
+  labels:
+    app: kqlstore-ai
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # Stateless, so this COULD scale — but it does not need to. One replica is what the
+  # design calls for, and the statelessness is what makes the NetworkPolicy hazard
+  # tractable: the AI pod is the one allowed to reach out, so keeping it small and
+  # boring is part of the isolation story. Scale it for load only, never for HA of the
+  # query store — this pod has no relationship to that store.
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kqlstore-ai
+  template:
+    metadata:
+      labels:
+        app: kqlstore-ai
+    spec:
+      # This pod makes outbound calls and holds no database, but it still never talks to
+      # the Kubernetes API, so a mounted ServiceAccount token would be pure attack
+      # surface — same reasoning as the other two deployments.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kqlstore-ai
+          image: 192.168.1.100:5000/kqlstore-ai:latest
+          ports:
+            - containerPort: 3001
+              protocol: TCP
+          env:
+            # optional: true on purpose. A missing Secret must not wedge the pod in
+            # CreateContainerConfigError: the health endpoint reports configured:false,
+            # the SPA hides the assist toggle, and forking/manual editing keep working.
+            # Provisioning the key later and rolling is the fix, not a crash loop.
+            - name: OLLAMA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kqlstore-ai
+                  key: OLLAMA_API_KEY
+                  optional: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Express has nothing to open on disk, so /tmp is the only writable surface and
+          # it does not even need mounting unless a future dependency wants it. Health is
+          # the same probe for startup, liveness and readiness: the pod either serves or
+          # it is dead, and unlike the API pod there is no single-writer volume to protect.
+          startupProbe:
+            httpGet:
+              path: /api/ai/health
+              port: 3001
+            periodSeconds: 2
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /api/ai/health
+              port: 3001
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/ai/health
+              port: 3001
+            periodSeconds: 5

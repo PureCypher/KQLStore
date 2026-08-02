@@ -5,9 +5,12 @@
 // up and nothing to leak. The isolation decision and the statelessness decision
 // reinforce each other (see docs/ai-assist.md).
 //
-// OLLAMA_API_KEY is read from process.env at REQUEST time (never at require
-// time), so rotating the Secret does not need a pod restart, and a pod that
-// started before the key existed starts serving the moment it appears.
+// OLLAMA_API_KEY is read from process.env at REQUEST time (never captured at
+// require time), so the code has no opinion about the key until a request needs
+// it. The value itself is injected at container start from the Secret, so
+// rotating the key requires a rollout restart — see docs/maintenance/ai-service.md.
+// The deployment mounts the Secret as optional: true, so a pod that starts before
+// the key exists reports configured:false instead of failing to start.
 // ---------------------------------------------------------------------------
 const express = require('express');
 

@@ -29,6 +29,20 @@ untouched, which is what allows the fields to be filled in over time rather than
 | `usageCount` | integer | no | Non-negative. Incremented when a query is copied; an upsert keeps the larger of the two sides. |
 | `created` | string | no | ISO 8601. Set on first write and never changed afterwards, including by an upsert. |
 | `updated` | string | no | ISO 8601. Decides who wins an upsert, and backs the optional precondition on `PUT`. |
+| `parentId` | string \| null | no | UUID v4 of the query this was forked from, or `null`. **Not a foreign key**: deleting a parent neither cascades to nor blocks its forks, so a `parentId` that resolves to nothing is an expected state and renders as an orphaned fork. A value that is not a UUID is dropped rather than failing the record. |
+| `parentName` | string | no | ≤ 200 characters. The parent's name **at fork time**, not a live reference. It is what lets an orphaned fork still say what it came from, so it is correct for it to go stale when the parent is renamed. |
+
+**Lineage sits outside the v4 detection block.** `parentId` and `parentName` are their own SQLite
+columns (`parent_id`, `parent_name` in `api/db.js`), assigned in `toFrontend` *after* the detection
+metadata is spread onto the record — see [How it is stored](#how-it-is-stored) — so they never
+appear inside `metadata` and never reach the Sentinel or ATT&CK Navigator exports. A fork is not
+detection metadata about the query; it is a fact about where the record came from, and none of the
+export formats have a field for that.
+
+Fork creation is client-side only: `src/domain/lineage.js`'s `makeFork` deep-clones the parent
+(inheriting its full v4 detection block — severity, ATT&CK mapping, everything) and overrides `id`,
+`created`, `updated`, `usageCount` (0), `favorite` (false), `tags` (a fresh array) and the two
+lineage fields. Nothing is written until the fork is saved like any other query.
 
 ## Detection metadata
 
@@ -93,8 +107,12 @@ CREATE TABLE IF NOT EXISTS queries (
 The detection block is **one JSON column, not seventeen columns**. It is optional, it is only ever
 read as a whole, and all filtering happens client-side once the SPA has loaded the store — the same
 reasoning that has applied to `tags` since the beginning. `api/db.js` carries additive `ALTER TABLE`
-migrations for `usage_count` and `metadata` so a database created by an older build is upgraded in
-place on startup.
+migrations for `usage_count`, `metadata`, `parent_id` and `parent_name` so a database created by an
+older build is upgraded in place on startup. `parent_id` and `parent_name` are not declared with a
+`REFERENCES` clause even though the connection opens with `foreign_keys = ON` — deliberately: a
+foreign key would force a choice between blocking a parent's deletion and cascading it to every
+fork, and both are wrong here. SQLite also refuses `REFERENCES` inside `ALTER TABLE ADD COLUMN`
+in any case, so an additive column could not have one.
 
 Over the wire the block is **flat**. `toFrontend` spreads `metadata` back to the top level, because
 that is the shape `validateQuery` works in, so `GET /api/queries` returns:

@@ -20,6 +20,10 @@ for the obligation that creates. The examples below assume the local Docker stac
 | `DELETE` | `/api/queries/:id` | Delete |
 | `POST` | `/api/queries/import` | Bulk load, `insert` or `upsert` |
 | `GET` | `/api/queries/export` | Every query in one envelope |
+| `GET` | `/api/schemas` | List every stored table schema |
+| `GET` | `/api/schemas/:name` | One table schema |
+| `PUT` | `/api/schemas/:name` | Create or overwrite, keyed on the path name |
+| `DELETE` | `/api/schemas/:name` | Delete |
 
 Records are the flat shape described in [docs/schema.md](schema.md#how-it-is-stored): the v4
 detection block is stored in one JSON column and spread to the top level on the way out.
@@ -176,6 +180,81 @@ entry names itself instead of disappearing. The whole batch runs in one transact
 README's [backup section](../README.md#backups) for pulling it out of a cluster. Note that the
 envelope still declares `schemaVersion: 3` while the records inside carry v4 metadata; see
 [docs/exports.md](exports.md#json-native).
+
+## Table schemas
+
+`table_schemas` is a second, independent SQLite table — nothing joins it to `queries`. It exists so
+a schema pasted from `TableName | getschema` has somewhere to live and be searched; it does not
+feed the linter, the table picker or any badge. See [docs/schemas.md](schemas.md) for what the
+store is for and how to fill it in; this section is the endpoint reference.
+
+```console
+$ curl -s http://localhost:8080/api/schemas
+[{"name":"SigninLogs","columns":[{"name":"TimeGenerated","type":"datetime"},…],
+  "notes":"UserPrincipalName is null for service principal sign-ins.",
+  "source":"getschema","updated":"2026-07-26T13:02:46.337Z"}]
+
+$ curl -s http://localhost:8080/api/schemas/SigninLogs
+{"name":"SigninLogs","columns":[…],"notes":"…","source":"getschema","updated":"…"}
+
+$ curl -s http://localhost:8080/api/schemas/NoSuchTable
+{"error":"Schema not found"}      # HTTP 404
+```
+
+`GET /api/schemas` returns every row, ordered by name. `GET /api/schemas/:name` returns one, or 404.
+
+### `PUT /api/schemas/:name` — upsert, keyed on the path
+
+```console
+$ curl -s -X PUT http://localhost:8080/api/schemas/SigninLogs -H 'Content-Type: application/json' \
+    -d '{"columns":[{"name":"TimeGenerated","type":"datetime"},{"name":"UserPrincipalName","type":"string"}],
+         "notes":"90-day retention on this workspace.","source":"getschema"}'
+{"name":"SigninLogs","columns":[…],"notes":"90-day retention on this workspace.",
+ "source":"getschema","updated":"2026-08-02T09:14:03.112Z"}
+```
+
+The row's identity is the **path** segment, not any `name` in the body — a `name` in the body is
+read, then thrown away, because the request is normalised to `{ ...body, name: <path name> }`
+before validation runs. Two sources of truth for the same key is how you end up with a row nobody
+can address by either name. The path name is also trimmed the same way on `GET`, `PUT` and
+`DELETE`, so `PUT /api/schemas/%20SigninLogs%20` and `GET /api/schemas/SigninLogs` resolve to the
+same row rather than one being unreachable.
+
+There is no separate create vs. update route: a name that does not exist yet is inserted, one that
+does is overwritten in full — `columns` and `notes` both replace what was stored, they do not merge
+with it. Renaming a table's schema is not supported; there is only upsert-by-name, so moving a
+schema to a new name means creating it under the new name and deleting the old one yourself.
+
+Bounds, from `LIMITS` in [`api/validate.js`](../api/validate.js):
+
+| Field | Bound |
+| --- | --- |
+| `name` (path segment) | 200 characters, required, non-empty after trimming |
+| `columns` | 500 entries |
+| `columns[].name` | 200 characters, required — a column with no name is rejected outright |
+| `columns[].type` | Free text. **Missing or blank defaults to `unknown`** rather than being rejected: `getschema` output pasted from a clipped copy sometimes loses the type column, and a column list without types is still far more useful than no schema at all |
+| `notes` | 5 000 characters |
+| `source` | one of `getschema`, `manual`, `import` — defaults to `getschema` |
+
+```console
+$ curl -s -X PUT http://localhost:8080/api/schemas/SigninLogs -H 'Content-Type: application/json' \
+    -d '{"columns":[{"type":"string"}]}'
+{"error":"every column needs a \"name\""}      # HTTP 400
+```
+
+### `DELETE /api/schemas/:name`
+
+```console
+$ curl -s -X DELETE http://localhost:8080/api/schemas/SigninLogs
+{"deleted":"SigninLogs"}
+
+$ curl -s -X DELETE http://localhost:8080/api/schemas/SigninLogs
+{"error":"Schema not found"}      # HTTP 404, already gone
+```
+
+Deleting a table's schema has no effect on any query — nothing references it. It only removes the
+reference row itself; a query whose `table` field names the now-schema-less table still validates,
+saves and exports exactly as before.
 
 ## Errors
 

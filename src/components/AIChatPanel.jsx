@@ -189,11 +189,14 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
         </button>
       </div>
 
-      {/* min-h-0 is load-bearing: a flex child defaults to min-height:auto, which lets
-          this area grow to its content instead of shrinking, so overflow-y-auto never
-          engages and auto-scroll has nothing to scroll. */}
+      {/* The min-height is load-bearing twice over. A flex child defaults to
+          min-height:auto, which lets this area grow to its content instead of shrinking,
+          so overflow-y-auto never engages and auto-scroll has nothing to scroll. But a
+          plain min-h-0 lets the opposite happen: a tall proposal review below squeezes the
+          conversation to a couple of pixels (measured at 24px). A concrete floor allows
+          shrinking AND keeps the conversation readable. */}
       <div ref={scrollRef} onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
+        className="flex-1 min-h-[7rem] overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
         {messages.length === 0 && !streamText && (
           <p className="text-gray-500">
             Ask the model to rewrite this query or its metadata. Proposals are reviewed before
@@ -226,9 +229,11 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
 
       {/* The gate and the review render over the message area, not instead of it: the
           conversation stays visible behind the decision the operator is being asked to
-          make. */}
+          make. Both are capped and scroll internally — a proposal touching a dozen fields
+          would otherwise claim the whole panel and leave no conversation to read it
+          against. */}
       {gate && (
-        <div className="px-3 pb-3">
+        <div className="px-3 pb-3 max-h-[55%] overflow-y-auto shrink-0">
           <RedactionPreview
             applied={gate.applied}
             blocked={gate.blocked}
@@ -240,7 +245,7 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
         </div>
       )}
       {review && (
-        <div className="px-3 pb-3">
+        <div className="px-3 pb-3 max-h-[55%] overflow-y-auto shrink-0">
           <ProposalReview
             key={proposalSeq}
             changes={review}

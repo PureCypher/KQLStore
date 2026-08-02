@@ -72,6 +72,10 @@ function makeAppValue(overrides = {}) {
     handleBulkTable: noop,
     savingState: 'idle',
     expandedIds: new Set(),
+    // AI assistant capability + grounding. aiAvailable drives the editor's assist
+    // toggle visibility; schemas are the assistant's reference data.
+    aiAvailable: false,
+    schemas: [],
     ...overrides,
   };
 }

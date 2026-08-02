@@ -80,3 +80,80 @@ describe('lint panel', () => {
     cleanup();
   });
 });
+
+// Stub the panel: it exposes one button that invokes onProposal with a fixed accepted
+// change, which is exactly the contract the editor depends on. Nothing else about the
+// panel is this suite's business — its own behaviour is covered in aiChat.test.js and
+// the wire in api-ai's chat suite.
+vi.mock('../AIChatPanel.jsx', () => ({
+  AIChatPanel: ({ onProposal, onClose }) => h('div', { 'data-testid': 'ai-chat-panel' },
+    h('button', {
+      type: 'button',
+      onClick: () => onProposal([
+        { field: 'name', from: 'Entra risky sign-in', to: 'Okta risky sign-in', valid: true, reason: '' },
+      ]),
+    }, 'apply stub proposal'),
+    h('button', { type: 'button', onClick: onClose }, 'close assistant'),
+  ),
+}));
+
+describe('AI assist and the shared draft', () => {
+  const openEditor = (overrides = {}) => renderWithApp(
+    h(QueryEditorModal, { key: 'a' }),
+    {
+      editingQuery: { id: 'a', name: 'Entra risky sign-in', query: 'SigninLogs | take 1', tags: [] },
+      saveQuery: vi.fn(),
+      setEditingQuery: vi.fn(),
+      aiAvailable: true,
+      ...overrides,
+    },
+  );
+
+  it('hides the assist toggle when the AI service is unavailable', () => {
+    openEditor({ aiAvailable: false });
+    expect(screen.queryByRole('button', { name: /assist with ai/i })).toBeNull();
+    cleanup();
+  });
+
+  it('offers the assist toggle when the service is up', () => {
+    openEditor();
+    expect(screen.getByRole('button', { name: /assist with ai/i })).toBeTruthy();
+    cleanup();
+  });
+
+  it('the form stays editable while the chat is open', () => {
+    openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /assist with ai/i }));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Typed by hand' } });
+    expect(screen.getByDisplayValue('Typed by hand')).toBeTruthy();
+    cleanup();
+  });
+
+  it('accepting a proposal writes through to the form', () => {
+    openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /assist with ai/i }));
+    fireEvent.click(screen.getByRole('button', { name: /apply stub proposal/i }));
+    expect(screen.getByDisplayValue('Okta risky sign-in')).toBeTruthy();
+    cleanup();
+  });
+
+  it('closing the chat keeps the accepted change in the form', () => {
+    openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /assist with ai/i }));
+    fireEvent.click(screen.getByRole('button', { name: /apply stub proposal/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close assistant/i }));
+    expect(screen.queryByTestId('ai-chat-panel')).toBeNull();
+    expect(screen.getByDisplayValue('Okta risky sign-in')).toBeTruthy();
+    cleanup();
+  });
+
+  it('a hand edit after a proposal is not overwritten', () => {
+    openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /assist with ai/i }));
+    fireEvent.click(screen.getByRole('button', { name: /apply stub proposal/i }));
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Final wording' } });
+    fireEvent.click(screen.getByRole('button', { name: /close assistant/i }));
+    expect(screen.getByDisplayValue('Final wording')).toBeTruthy();
+    cleanup();
+  });
+});

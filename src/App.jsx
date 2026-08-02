@@ -67,6 +67,11 @@ export default function App() {
   const [showInspector, setShowInspector] = useState(false);
   const [importPreview, setImportPreview] = useState(null); // {text, preview} for import preview modal
   const [toasts, setToasts] = useState([]);
+  // Whether the kqlstore-ai service is reachable. Feeds the assist toggle's visibility:
+  // scaled to zero, the editor degrades to manual editing with no toggle at all.
+  const [aiAvailable, setAiAvailable] = useState(false);
+  // The schema store, fetched once: the assistant's grounding for what columns exist.
+  const [schemas, setSchemas] = useState([]);
   const mobileSidebarTitleId = useId();
   const tabBaseId = useId();
   const tabIds = {
@@ -92,6 +97,18 @@ export default function App() {
       addToast(storageError, 'error');
     }
   }, [storageError, addToast]);
+
+  // Feature detection + grounding, once on mount. The health probe is the toggle's
+  // signal; the schemas are the assistant's reference data and failing to fetch them
+  // just means the assistant runs ungrounded, so that failure is silent.
+  useEffect(() => {
+    let cancelled = false;
+    StorageAdapter.aiHealth().then((ok) => { if (!cancelled) setAiAvailable(ok); });
+    StorageAdapter.fetchSchemas()
+      .then((s) => { if (!cancelled) setSchemas(Array.isArray(s) ? s : []); })
+      .catch(() => { if (!cancelled) setSchemas([]); });
+    return () => { cancelled = true; };
+  }, []);
 
   // --- Storage Operations ---
   const saveQuery = useCallback(async (queryData) => {
@@ -480,13 +497,15 @@ export default function App() {
     handleBulkDelete, handleBulkExport, handleBulkCategory, handleBulkTable,
     savingState,
     expandedIds,
+    aiAvailable,
+    schemas,
   }), [
     toasts, showKeyboardHelp, editingQuery, saveQuery, copyToClipboard, deleteQuery,
     duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
     queries, stats, allTags, categoryCounts, searchTerm, selectedCategory, selectedTable,
     showFavoritesOnly, lineageFilter, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
     importPreview, confirmImport, handleBulkDelete, handleBulkExport, handleBulkCategory,
-    handleBulkTable, savingState, expandedIds, searchRef,
+    handleBulkTable, savingState, expandedIds, searchRef, aiAvailable, schemas,
   ]);
 
   if (isLoading) {

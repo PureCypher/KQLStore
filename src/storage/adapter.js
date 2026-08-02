@@ -254,6 +254,24 @@ const StorageAdapter = {
   },
 
   /**
+   * AI health probe — the feature-detection call. The SPA shows the assist toggle only
+   * when the service answers, so scaling kqlstore-ai to zero degrades to manual editing
+   * rather than erroring. A non-ok or missing service is the normal state, not an error,
+   * so this resolves to `false` instead of throwing.
+   */
+  async aiHealth() {
+    try {
+      const res = await fetch(`${API_BASE}/ai/health`, { credentials: 'include' });
+      if (!res.ok) return false;
+      const data = await res.json();
+      operationLog.add({ type: 'API_AI_HEALTH', key: 'health', success: true, latencyMs: 0 });
+      return data && data.status === 'ok';
+    } catch {
+      return false;
+    }
+  },
+
+  /**
    * Chat. Returns the raw Response so the caller can read the NDJSON stream itself —
    * this endpoint does not answer with a single JSON document, so it cannot be parsed
    * here the way the other methods parse theirs. Callers check res.ok and handle a

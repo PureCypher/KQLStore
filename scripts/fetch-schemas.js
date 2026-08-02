@@ -6,6 +6,13 @@
 //   node scripts/fetch-schemas.js [output-path]     # default ./table-schemas.json
 // ---------------------------------------------------------------------------
 
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SENTINEL_TABLES } from '../src/constants.js';
+
 // Parses `| Name | type | description |` rows from the first markdown table in
 // `section`. The first `|` line is the header, `|---|` separators are skipped,
 // and the table ends at the first non-`|` line after it started — later tables
@@ -153,5 +160,75 @@ function buildImportRows({ azure, defender, sentinelTableNames, scrapeDate }) {
 
   return { rows, warnings };
 }
+
+const SOURCES = {
+  azure: {
+    repo: 'https://github.com/MicrosoftDocs/azure-monitor-docs.git',
+    sparsePath: 'articles/azure-monitor/reference/tables',
+  },
+  defender: {
+    repo: 'https://github.com/MicrosoftDocs/defender-docs.git',
+    sparsePath: 'defender-xdr',
+  },
+};
+
+// Shallow sparse clone: two git commands instead of ~1,200 rate-limited HTTP
+// fetches. Returns the checked-out sparse dir and the clone root to delete.
+function cloneSparse({ repo, sparsePath }) {
+  const root = mkdtempSync(join(tmpdir(), 'kqlstore-schemas-'));
+  execFileSync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', '--quiet', repo, root], { stdio: 'inherit' });
+  execFileSync('git', ['-C', root, 'sparse-checkout', 'set', sparsePath], { stdio: 'inherit' });
+  return { dir: join(root, sparsePath), root };
+}
+
+function parseDirectory(dir, filePattern, parse) {
+  const parsed = [];
+  const skipped = [];
+  for (const file of readdirSync(dir).filter((f) => filePattern.test(f))) {
+    const result = parse(readFileSync(join(dir, file), 'utf8'));
+    if (result) parsed.push(result);
+    else skipped.push(file);
+  }
+  return { parsed, skipped };
+}
+
+function main() {
+  const outPath = process.argv[2] ?? './table-schemas.json';
+  const scrapeDate = new Date().toISOString().slice(0, 10);
+  const cloneRoots = [];
+  try {
+    console.log('Cloning MicrosoftDocs/azure-monitor-docs (sparse)...');
+    const azureClone = cloneSparse(SOURCES.azure);
+    cloneRoots.push(azureClone.root);
+    const azure = parseDirectory(azureClone.dir, /\.md$/, parseAzureMonitorTable);
+
+    console.log('Cloning MicrosoftDocs/defender-docs (sparse)...');
+    const defenderClone = cloneSparse(SOURCES.defender);
+    cloneRoots.push(defenderClone.root);
+    const defender = parseDirectory(
+      defenderClone.dir,
+      /^advanced-hunting-.+-table\.md$/,
+      parseDefenderTable,
+    );
+
+    const { rows, warnings } = buildImportRows({
+      azure: azure.parsed,
+      defender: defender.parsed,
+      sentinelTableNames: SENTINEL_TABLES,
+      scrapeDate,
+    });
+
+    writeFileSync(outPath, `${JSON.stringify(rows, null, 2)}\n`);
+
+    for (const warning of warnings) console.warn(`warning: ${warning}`);
+    const skipped = [...azure.skipped.map((f) => `azure:${f}`), ...defender.skipped.map((f) => `defender:${f}`)];
+    console.log(`${rows.length} tables written to ${outPath} (${azure.parsed.length} Log Analytics docs parsed, ${defender.parsed.length} Defender).`);
+    if (skipped.length) console.log(`${skipped.length} files skipped (no parseable schema): ${skipped.join(', ')}`);
+  } finally {
+    for (const root of cloneRoots) rmSync(root, { recursive: true, force: true });
+  }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
 
 export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph, buildImportRows };

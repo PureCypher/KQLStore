@@ -191,6 +191,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # api-ai/lib/redact.js is deliberately gitignored: locally it is a symlink
+      # into api/, and the image build copies the file in (see api-ai/Dockerfile).
+      # A clean checkout has neither, so CI makes the copy itself.
+      - name: Materialize the shared redaction module
+        run: cp ../api/lib/redact.js lib/redact.js
+
       - name: Run tests
         run: |
           if [ ! -d test ]; then

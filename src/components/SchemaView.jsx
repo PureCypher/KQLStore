@@ -6,6 +6,7 @@ import { useToast } from '../context/toast.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { Modal } from './Modal.jsx';
 import { useSchemaImportExport, SchemaImportModal } from './SchemaImportExport.jsx';
+import { SchemaColumnList } from './SchemaColumnList.jsx';
 import { FOCUS_RING } from './a11y.jsx';
 
 // ---------------------------------------------------------------------------
@@ -178,10 +179,20 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
   const trimmedName = nameInput.trim();
   const canSave = Boolean(trimmedName) && Boolean(columnsForSave) && !saving;
 
+  // Matches on the table name OR on any column name, because "which table has RemoteIP"
+  // is the question this store exists to answer and a name-only search cannot. Each row
+  // carries its column-hit count so the list can say why it matched.
   const filteredSchemas = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return schemas;
-    return schemas.filter((s) => s.name.toLowerCase().includes(term));
+    if (!term) return schemas.map((schema) => ({ schema, columnMatches: 0 }));
+    const out = [];
+    for (const schema of schemas) {
+      const nameHit = schema.name.toLowerCase().includes(term);
+      let columnMatches = 0;
+      for (const c of schema.columns) if (c.name.toLowerCase().includes(term)) columnMatches++;
+      if (nameHit || columnMatches > 0) out.push({ schema, columnMatches });
+    }
+    return out;
   }, [schemas, searchTerm]);
 
   const resetForm = () => {
@@ -279,13 +290,15 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
       <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
 
       <div className="flex items-center gap-2 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid #1e1e2e', background: '#0d0d14' }}>
-        <label htmlFor={ids.search} className="sr-only">Search schemas</label>
+        <label htmlFor={ids.search} className="sr-only">Search table and column names</label>
         <div className="relative flex-1 max-w-xs">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true" />
           <input id={ids.search} className={`${inputCls} pl-8`} style={inputSty} value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search table schemas..." />
+            onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search tables and columns..." />
         </div>
-        <span className="text-xs text-gray-500">{schemas.length} schemas</span>
+        <span className="text-xs text-gray-500">
+          {searchTerm.trim() ? `${filteredSchemas.length} of ${schemas.length} schemas` : `${schemas.length} schemas`}
+        </span>
         <div className="ml-auto flex items-center gap-2">
           <button onClick={resetForm} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold ${FOCUS_RING}`}
             style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} aria-hidden="true" /><span className="hidden sm:inline">New Schema</span></button>
@@ -323,7 +336,7 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
               </p>
             ) : (
               <ul className="space-y-2">
-                {filteredSchemas.map((s) => (
+                {filteredSchemas.map(({ schema: s, columnMatches }) => (
                   <li key={s.name} className="flex items-center gap-2 rounded-lg"
                     style={{ background: selectedName === s.name ? '#12121a' : 'transparent', border: `1px solid ${selectedName === s.name ? '#00d4ff' : '#1e1e2e'}` }}>
                     <button onClick={() => handleSelect(s)} className={`flex-1 text-left px-3 py-2 ${FOCUS_RING}`}
@@ -332,6 +345,12 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
                       <div className="text-xs text-gray-500 mt-0.5">
                         {columnWord(s.columns.length)} &middot; {SOURCE_LABELS[s.source] || s.source} &middot; {s.updated ? new Date(s.updated).toLocaleDateString() : 'unknown'}
                       </div>
+                      {/* Says why a row is here when the name alone does not explain it. */}
+                      {columnMatches > 0 && (
+                        <div className="text-xs mt-0.5" style={{ color: '#00d4ff' }}>
+                          {columnMatches} matching {columnMatches === 1 ? 'column' : 'columns'}
+                        </div>
+                      )}
                     </button>
                     <button onClick={() => setDeleteTarget(s.name)} aria-label={`Delete schema ${s.name}`} title="Delete"
                       className={`p-2 mr-1 rounded hover:bg-white/10 ${FOCUS_RING}`}>
@@ -350,8 +369,20 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
                 aria-required="true" disabled={Boolean(selectedSchema)}
                 onChange={(e) => setNameInput(e.target.value)} placeholder="e.g. SigninLogs" />
             </div>
+            {/* The stored columns, for reading rather than editing — the lookup the store
+                exists for. Keyed on the name so switching tables reseeds the filter from
+                the list search: search a column, click the table, land on that column. */}
+            {selectedSchema && (
+              <div>
+                <span className={labelCls}>Stored columns</span>
+                <SchemaColumnList key={selectedSchema.name} columns={selectedSchema.columns}
+                  initialFilter={searchTerm.trim()} />
+              </div>
+            )}
             <div>
-              <label className={labelCls} htmlFor={ids.paste}>Paste `| getschema` output</label>
+              <label className={labelCls} htmlFor={ids.paste}>
+                {selectedSchema ? 'Replace columns with `| getschema` output' : 'Paste `| getschema` output'}
+              </label>
               <textarea id={ids.paste} className={`${inputCls} font-mono`} style={{ ...inputSty, minHeight: 140, resize: 'vertical' }}
                 aria-describedby={ids.pasteHint} spellCheck={false}
                 value={pasteText} onChange={(e) => setPasteText(e.target.value)}

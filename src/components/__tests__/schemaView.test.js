@@ -95,12 +95,69 @@ describe('loading the schema list', () => {
 });
 
 describe('search', () => {
+  const SEARCH_LABEL = 'Search table and column names';
+
   it('filters the list to schemas whose name matches', async () => {
     await mount(routes({ list: [SIGNIN_LOGS, { ...SIGNIN_LOGS, name: 'DeviceInfo' }] }));
     await screen.findByText('SigninLogs');
-    fireEvent.change(screen.getByLabelText('Search schemas'), { target: { value: 'device' } });
+    fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: 'device' } });
     expect(screen.queryByText('SigninLogs')).toBeNull();
     expect(screen.getByText('DeviceInfo')).toBeTruthy();
+  });
+
+  it('also matches on column names, saying how many columns matched', async () => {
+    // "which table has UserPrincipalName" is the question a name-only search cannot answer.
+    await mount(routes({ list: [SIGNIN_LOGS, { ...SIGNIN_LOGS, name: 'Heartbeat', columns: [{ name: 'Computer', type: 'string' }] }] }));
+    await screen.findByText('SigninLogs');
+    fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: 'userprincipal' } });
+    expect(screen.getByText('SigninLogs')).toBeTruthy();
+    expect(screen.queryByText('Heartbeat')).toBeNull();
+    expect(screen.getByText('1 matching column')).toBeTruthy();
+  });
+
+  it('reports how much of the store the search kept', async () => {
+    await mount(routes({ list: [SIGNIN_LOGS, { ...SIGNIN_LOGS, name: 'DeviceInfo' }] }));
+    await screen.findByText('SigninLogs');
+    fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: 'device' } });
+    expect(screen.getByText('1 of 2 schemas')).toBeTruthy();
+  });
+});
+
+describe('the stored columns', () => {
+  const SEARCH_LABEL = 'Search table and column names';
+
+  it('shows each column name and type once a schema is selected', async () => {
+    await mount(routes({ list: [SIGNIN_LOGS] }));
+    fireEvent.click(await screen.findByText('SigninLogs'));
+    expect(await screen.findByText('TimeGenerated')).toBeTruthy();
+    expect(screen.getByText('UserPrincipalName')).toBeTruthy();
+    expect(screen.getAllByText('string').length).toBeGreaterThan(0);
+    expect(screen.getByText('datetime')).toBeTruthy();
+  });
+
+  it('is absent until a schema is selected', async () => {
+    await mount(routes({ list: [SIGNIN_LOGS] }));
+    await screen.findByText('SigninLogs');
+    expect(screen.queryByPlaceholderText('Filter columns…')).toBeNull();
+  });
+
+  it('filters the columns locally', async () => {
+    await mount(routes({ list: [SIGNIN_LOGS] }));
+    fireEvent.click(await screen.findByText('SigninLogs'));
+    fireEvent.change(await screen.findByPlaceholderText('Filter columns…'), { target: { value: 'user' } });
+    expect(screen.getByText('UserPrincipalName')).toBeTruthy();
+    expect(screen.queryByText('TimeGenerated')).toBeNull();
+    expect(screen.getByText('1 of 2')).toBeTruthy();
+  });
+
+  it('seeds the column filter from the list search, so a column hit lands on that column', async () => {
+    await mount(routes({ list: [SIGNIN_LOGS] }));
+    await screen.findByText('SigninLogs');
+    fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: 'userprincipal' } });
+    fireEvent.click(screen.getByText('SigninLogs'));
+    expect((await screen.findByPlaceholderText('Filter columns…')).value).toBe('userprincipal');
+    expect(screen.getByText('UserPrincipalName')).toBeTruthy();
+    expect(screen.queryByText('TimeGenerated')).toBeNull();
   });
 });
 

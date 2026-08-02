@@ -129,7 +129,17 @@ free-text field with real room (5 000 characters) rather than an afterthought ne
 ## Using it
 
 The Schemas tab (a second top-level tab next to Queries — no router, no separate URL) is a
-searchable list of stored schemas beside a form: a name field, the paste box, and notes.
+searchable list of stored schemas beside a form: a name field, the stored columns, the paste box,
+and notes.
+
+- **Search matches table names and column names.** *"Which table has `RemoteIP`?"* is the question
+  the store exists to answer, and a name-only search could not: a row matched on its columns says
+  so (*"3 matching columns"*), and the header reports how much of the store survived the search.
+- **Selecting a schema shows its stored columns** — name and type, with their own filter for tables
+  running to dozens of columns. The filter is seeded from the list search, so searching a column
+  name and clicking the table that matched lands you on that column rather than on all ninety-five
+  of them. This panel is for reading; the paste box below it still does the writing, and relabels
+  itself to **Replace columns** when a schema is selected.
 
 - **Saving is always an upsert, keyed on the name you typed or selected — there is no separate
   edit form.** Selecting an existing schema from the list loads its name and notes and disables the

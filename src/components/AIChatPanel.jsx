@@ -189,8 +189,11 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
         </button>
       </div>
 
+      {/* min-h-0 is load-bearing: a flex child defaults to min-height:auto, which lets
+          this area grow to its content instead of shrinking, so overflow-y-auto never
+          engages and auto-scroll has nothing to scroll. */}
       <div ref={scrollRef} onScroll={onScroll}
-        className="flex-1 overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
+        className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
         {messages.length === 0 && !streamText && (
           <p className="text-gray-500">
             Ask the model to rewrite this query or its metadata. Proposals are reviewed before

@@ -318,8 +318,14 @@ const QueryEditorModal = () => {
 
           <DetectionMetadataFields value={meta} onChange={setMeta} />
         </div>
+        {/* The assist column is given a bounded height, and sticks against the backdrop's
+            scroll. Without a height nothing constrains the panel: its message area's
+            overflow-y-auto never fires, the conversation grows the whole modal (measured
+            at 3 074px on a 560px-tall window), and the reply lands below the fold of the
+            page rather than scrolling inside the panel. Sticky keeps it in view while the
+            form column — which is what actually makes the modal tall — scrolls past. */}
         {assistOpen && (
-          <div className="w-[28rem] shrink-0 min-w-0" style={{ borderLeft: '1px solid #1e1e2e' }}>
+          <div className="w-[28rem] shrink-0 min-w-0 sticky top-0 h-[75vh]" style={{ borderLeft: '1px solid #1e1e2e' }}>
             {/* The panel shares the draft; it reports accepted changes through onProposal
                 and the form owns them. Unmounting it on close discards the conversation —
                 the accepted fields are already in the form. */}

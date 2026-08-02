@@ -1,9 +1,19 @@
 import React from 'react';
-import { Search, Star, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Search, Star, GitFork, ChevronDown, ChevronUp, X } from 'lucide-react';
 import { CATEGORIES, CATEGORY_COLORS, DEFENDER_TABLES, SENTINEL_TABLES, SORT_OPTIONS, TABLE_STYLES } from '../constants.js';
 import { getTableDisplayName, getTableGroup } from '../domain/tables.js';
+import { matchesLineageFilter } from '../domain/lineage.js';
 import { useApp } from '../context/app.js';
 import { FOCUS_RING } from './a11y.jsx';
+
+// Kept module-scope rather than derived from constants.js because this filter is local to
+// the sidebar: it drives `matchesLineageFilter`'s `filter` argument directly, and the brief
+// scopes this task away from touching constants.js.
+const LINEAGE_FILTERS = [
+  { value: 'forks', label: 'Forks' },
+  { value: 'parents', label: 'Parents' },
+  { value: 'orphans', label: 'Orphans' },
+];
 
 // Note on ids: App renders this twice — once in the desktop <aside> and once inside the
 // mobile overlay — so nothing here may carry a literal id. Every association below is
@@ -17,7 +27,19 @@ import { FOCUS_RING } from './a11y.jsx';
 // well under the 4.5:1 that WCAG 1.4.3 asks of body text. text-gray-400 is 7.3:1 and is
 // the dimmest step on the Tailwind grey ramp that passes here.
 const SidebarContent = () => {
-  const { allTags, categoryCounts, clearFilters, hasActiveFilters, queries, searchRef, searchTerm, selectedCategory, selectedTable, selectedTags, setSearchTerm, setSelectedCategory, setSelectedTable, setSelectedTags, setShowFavoritesOnly, setSortBy, setSortDir, setTableFilterExpanded, showFavoritesOnly, sortBy, sortDir, stats, tableFilterExpanded } = useApp();
+  const { allTags, categoryCounts, clearFilters, hasActiveFilters, lineage, lineageFilter, queries, searchRef, searchTerm, selectedCategory, selectedTable, selectedTags, setLineageFilter, setSearchTerm, setSelectedCategory, setSelectedTable, setSelectedTags, setShowFavoritesOnly, setSortBy, setSortDir, setTableFilterExpanded, showFavoritesOnly, sortBy, sortDir, stats, tableFilterExpanded } = useApp();
+  // Counts drive both the visible badge and, together with `lineageFilter`, whether the
+  // section renders at all: a store with no forks has nothing to filter by (three empty
+  // toggles would be noise), but the section stays mounted whenever a lineage filter is
+  // already active even if its count has since dropped to zero — e.g. the user filtered to
+  // Orphans, then the last orphan's parent was restored. Hiding the control in that moment
+  // would strand the user on a filtered, unexplained list with no way back short of "Clear
+  // all filters", which also wipes every other filter they did not ask to lose.
+  const lineageCounts = {
+    forks: queries.filter((q) => matchesLineageFilter(q, 'forks', lineage.forkIndex, lineage.byId)).length,
+    parents: queries.filter((q) => matchesLineageFilter(q, 'parents', lineage.forkIndex, lineage.byId)).length,
+    orphans: queries.filter((q) => matchesLineageFilter(q, 'orphans', lineage.forkIndex, lineage.byId)).length,
+  };
   return (
   <div className="flex flex-col h-full overflow-y-auto p-4 space-y-5 font-mono text-sm" style={{ background: '#0d0d14' }}>
     <div className="relative">
@@ -102,6 +124,31 @@ const SidebarContent = () => {
         );
       })}
     </div>
+
+    {(lineageCounts.forks > 0 || lineageFilter) && (
+      <div>
+        <h2 className="text-xs text-gray-400 uppercase tracking-wider mb-2">Lineage</h2>
+        <div className="space-y-0.5">
+          {LINEAGE_FILTERS.map(({ value, label }) => {
+            const count = lineageCounts[value];
+            const isActive = lineageFilter === value;
+            return (
+              <button key={value} onClick={() => setLineageFilter(isActive ? null : value)}
+                aria-pressed={isActive}
+                aria-label={`${label}, ${count} ${count === 1 ? 'query' : 'queries'}`}
+                className={`w-full flex justify-between items-center px-3 py-1.5 rounded-md text-left text-xs transition-colors ${isActive ? '' : 'hover:bg-white/5'} ${FOCUS_RING}`}
+                style={isActive ? { background: '#00d4ff20', color: '#00d4ff' } : { color: '#aaa' }}>
+                <span className="flex items-center gap-2">
+                  <GitFork size={12} aria-hidden="true" />
+                  {label}
+                </span>
+                <span className="text-gray-400">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    )}
 
     {allTags.length > 0 && (
       <div>

@@ -1,0 +1,201 @@
+import { describe, it, expect } from 'vitest';
+import { makeFork, indexById, childrenOf, isOrphan, matchesLineageFilter } from '../lineage.js';
+
+const q = (id, over = {}) => ({
+  id, name: `q-${id}`, query: 'SigninLogs | take 1', description: 'd',
+  category: 'Hunting', table: 'SigninLogs', tags: ['a'], favorite: true,
+  usageCount: 7, parentId: null, parentName: '',
+  created: '2026-01-01T00:00:00Z', updated: '2026-01-01T00:00:00Z',
+  ...over,
+});
+
+describe('makeFork', () => {
+  const parent = q('p1', { name: 'Entra risky sign-in' });
+  const fork = makeFork(parent, 'f1', '2026-07-31T10:00:00Z');
+
+  it('records the parent id and a snapshot of its name', () => {
+    expect(fork.parentId).toBe('p1');
+    expect(fork.parentName).toBe('Entra risky sign-in');
+  });
+
+  it('takes the new id and timestamps', () => {
+    expect(fork.id).toBe('f1');
+    expect(fork.created).toBe('2026-07-31T10:00:00Z');
+    expect(fork.updated).toBe('2026-07-31T10:00:00Z');
+  });
+
+  it('resets usage and favourite, which belong to the original', () => {
+    expect(fork.usageCount).toBe(0);
+    expect(fork.favorite).toBe(false);
+  });
+
+  it('copies the content fields verbatim', () => {
+    expect(fork.query).toBe(parent.query);
+    expect(fork.description).toBe(parent.description);
+    expect(fork.tags).toEqual(['a']);
+  });
+
+  it('does not alias the parent tags array', () => {
+    fork.tags.push('b');
+    expect(parent.tags).toEqual(['a']);
+  });
+
+  it('forking a fork points at the immediate parent, not the root', () => {
+    const second = makeFork(fork, 'f2', '2026-07-31T11:00:00Z');
+    expect(second.parentId).toBe('f1');
+  });
+
+  it('inherits detection metadata (severity, confidence, queryType, platform)', () => {
+    const enriched = q('p2', {
+      name: 'Detection with metadata',
+      severity: 'High',
+      confidence: 'Medium',
+      queryType: 'Detection',
+      platform: 'Azure Sentinel',
+    });
+    const forkOfEnriched = makeFork(enriched, 'f3', '2026-07-31T12:00:00Z');
+    expect(forkOfEnriched.severity).toBe('High');
+    expect(forkOfEnriched.confidence).toBe('Medium');
+    expect(forkOfEnriched.queryType).toBe('Detection');
+    expect(forkOfEnriched.platform).toBe('Azure Sentinel');
+  });
+
+  it('inherits attack tactics and techniques', () => {
+    const detection = q('p3', {
+      name: 'Attack detection',
+      attack: {
+        tactics: ['Persistence', 'DefenseEvasion'],
+        techniques: ['T1078.004', 'T1562.001'],
+      },
+    });
+    const forkOfDetection = makeFork(detection, 'f4', '2026-07-31T12:30:00Z');
+    expect(forkOfDetection.attack).toEqual({
+      tactics: ['Persistence', 'DefenseEvasion'],
+      techniques: ['T1078.004', 'T1562.001'],
+    });
+  });
+
+  it('does not alias nested attack object to parent', () => {
+    const detection = q('p4', {
+      name: 'Detection with nested object',
+      attack: {
+        tactics: ['Persistence'],
+        techniques: ['T1078.004'],
+      },
+    });
+    const forkOfDetection = makeFork(detection, 'f5', '2026-07-31T13:00:00Z');
+    // Mutate the fork's nested object
+    forkOfDetection.attack.tactics.push('Execution');
+    // Parent should not be affected
+    expect(detection.attack.tactics).toEqual(['Persistence']);
+  });
+
+  it('inherits datasources, entity mappings, and other schema v4 fields', () => {
+    const fullDetection = q('p5', {
+      name: 'Full detection',
+      dataSources: ['Azure AD', 'Office 365'],
+      entityMappings: ['Account.Name', 'IP.Address'],
+      falsePositives: 'Service accounts',
+      references: ['https://example.com'],
+      tuningNotes: 'Monitor for exceptions',
+      lookback: '7d',
+      version: '1.0.0',
+      lastValidated: '2026-07-01T00:00:00Z',
+      author: 'SOC Team',
+      license: 'MIT',
+    });
+    const forkOfFull = makeFork(fullDetection, 'f6', '2026-07-31T13:30:00Z');
+    expect(forkOfFull.dataSources).toEqual(['Azure AD', 'Office 365']);
+    expect(forkOfFull.entityMappings).toEqual(['Account.Name', 'IP.Address']);
+    expect(forkOfFull.falsePositives).toBe('Service accounts');
+    expect(forkOfFull.references).toEqual(['https://example.com']);
+    expect(forkOfFull.tuningNotes).toBe('Monitor for exceptions');
+    expect(forkOfFull.lookback).toBe('7d');
+    expect(forkOfFull.version).toBe('1.0.0');
+    expect(forkOfFull.lastValidated).toBe('2026-07-01T00:00:00Z');
+    expect(forkOfFull.author).toBe('SOC Team');
+    expect(forkOfFull.license).toBe('MIT');
+  });
+
+  it('resets name to match parent name (inherit, not reset)', () => {
+    const parent1 = q('p6', { name: 'Original Name' });
+    const fork1 = makeFork(parent1, 'f7', '2026-07-31T14:00:00Z');
+    expect(fork1.name).toBe('Original Name');
+  });
+});
+
+describe('childrenOf', () => {
+  it('groups forks under their parent', () => {
+    const map = childrenOf([q('p1'), q('a', { parentId: 'p1' }), q('b', { parentId: 'p1' }), q('c')]);
+    expect(map.get('p1')).toEqual(['a', 'b']);
+    expect(map.has('c')).toBe(false);
+  });
+});
+
+describe('isOrphan', () => {
+  it('is true when parentId points at nothing', () => {
+    const o = q('o', { parentId: 'gone' });
+    expect(isOrphan(o, indexById([o]))).toBe(true);
+  });
+
+  it('is false for a resolvable parent', () => {
+    const all = [q('p'), q('c', { parentId: 'p' })];
+    expect(isOrphan(all[1], indexById(all))).toBe(false);
+  });
+
+  it('is false for a query that was never a fork', () => {
+    const all = [q('p')];
+    expect(isOrphan(all[0], indexById(all))).toBe(false);
+  });
+});
+
+describe('matchesLineageFilter', () => {
+  const parent = q('p1');
+  const fork = q('f1', { parentId: 'p1' });
+  const lone = q('l1');
+  const orphan = q('o1', { parentId: 'gone' });
+  const all = [parent, fork, lone, orphan];
+  const idx = childrenOf(all);
+  const byId = indexById(all);
+
+  it('passes everything when the filter is null', () => {
+    expect(all.filter((x) => matchesLineageFilter(x, null, idx, byId))).toHaveLength(4);
+  });
+
+  it('"forks" selects queries that have a parent', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'forks', idx, byId));
+    expect(got.map((x) => x.id).sort()).toEqual(['f1', 'o1']);
+  });
+
+  it('"parents" selects queries that have at least one fork', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'parents', idx, byId));
+    expect(got.map((x) => x.id)).toEqual(['p1']);
+  });
+
+  it('"orphans" selects forks whose parent is gone', () => {
+    const got = all.filter((x) => matchesLineageFilter(x, 'orphans', idx, byId));
+    expect(got.map((x) => x.id)).toEqual(['o1']);
+  });
+
+  it('a mid-chain query is both a fork and a parent at once, not one or the other', () => {
+    // root -> middle -> leaf. `middle` has a parent (root) AND a child (leaf), so it must
+    // match 'forks' and 'parents' simultaneously. The three predicates are independent
+    // checks on the same query, not branches of a single classification — collapsing them
+    // into an if/else chain (as if every query were exactly one of fork/parent/neither)
+    // would silently drop `middle` from one of the two filters it belongs in.
+    const root = q('root');
+    const middle = q('middle', { parentId: 'root' });
+    const leaf = q('leaf', { parentId: 'middle' });
+    const chain = [root, middle, leaf];
+    const chainIdx = childrenOf(chain);
+    const chainById = indexById(chain);
+
+    const forksResult = chain.filter((x) => matchesLineageFilter(x, 'forks', chainIdx, chainById));
+    const parentsResult = chain.filter((x) => matchesLineageFilter(x, 'parents', chainIdx, chainById));
+    const orphansResult = chain.filter((x) => matchesLineageFilter(x, 'orphans', chainIdx, chainById));
+
+    expect(forksResult.map((x) => x.id).sort()).toEqual(['leaf', 'middle']);
+    expect(parentsResult.map((x) => x.id).sort()).toEqual(['middle', 'root']);
+    expect(orphansResult).toEqual([]);
+  });
+});

@@ -130,3 +130,74 @@ describe('simpleHash', () => {
     expect(simpleHash('abc')).not.toBe(simpleHash('abd'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fork lineage.
+//
+// The SPA is deliberately stricter than the API here. The API bounds parentId at
+// LIMITS.id and accepts any string, because it has no opinion about id formats. The SPA
+// requires a UUID, because validateQuery already refuses a non-UUID `id` outright — so a
+// non-UUID parentId could never resolve to a query in this store, and keeping it would
+// render a fork badge pointing at something that cannot exist.
+//
+// A bad pointer is dropped rather than failing the record. The fork's own content is
+// still valid and still worth storing, and an unusable pointer to an ancestor is exactly
+// as recoverable as no pointer at all.
+// ---------------------------------------------------------------------------
+describe('lineage validation', () => {
+  const parentUuid = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+
+  it('keeps a valid parentId and parentName', () => {
+    const r = validateQuery(valid({ parentId: parentUuid, parentName: 'Entra risky sign-in' }));
+    expect(r.valid).toBe(true);
+    expect(r.sanitized.parentId).toBe(parentUuid);
+    expect(r.sanitized.parentName).toBe('Entra risky sign-in');
+  });
+
+  it('defaults to null and an empty string when absent', () => {
+    const r = validateQuery(valid());
+    expect(r.sanitized.parentId).toBeNull();
+    expect(r.sanitized.parentName).toBe('');
+  });
+
+  it('drops a non-UUID parentId without failing the record', () => {
+    const r = validateQuery(valid({ parentId: 'not-a-uuid' }));
+    expect(r.valid).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.sanitized.parentId).toBeNull();
+  });
+
+  it('drops a non-string parentId', () => {
+    expect(validateQuery(valid({ parentId: 42 })).sanitized.parentId).toBeNull();
+    expect(validateQuery(valid({ parentId: { id: parentUuid } })).sanitized.parentId).toBeNull();
+  });
+
+  it('clears parentName when the pointer it belongs to was dropped', () => {
+    // The two are a pair: the badge only renders when parentId is set, so a surviving
+    // parentName would be invisible dead weight in every future round-trip.
+    const r = validateQuery(valid({ parentId: 'not-a-uuid', parentName: 'Orphaned label' }));
+    expect(r.sanitized.parentId).toBeNull();
+    expect(r.sanitized.parentName).toBe('');
+  });
+
+  it('trims and truncates an over-long parentName rather than rejecting', () => {
+    const r = validateQuery(valid({ parentId: parentUuid, parentName: `  ${'x'.repeat(300)}  ` }));
+    expect(r.valid).toBe(true);
+    expect(r.sanitized.parentName).toHaveLength(200);
+  });
+
+  it('accepts a parentId that resolves to nothing — resolvability is not its job', () => {
+    const r = validateQuery(valid({ parentId: parentUuid, parentName: 'Deleted parent' }));
+    expect(r.sanitized.parentId).toBe(parentUuid);
+  });
+
+  it('detection metadata cannot shadow lineage', () => {
+    // Mirrors the same guard on the API's toFrontend: whatever else is merged into the
+    // sanitized record, the lineage fields are written last and win.
+    const r = validateQuery(valid({
+      parentId: parentUuid, parentName: 'Real', severity: 'High',
+    }));
+    expect(r.sanitized.parentId).toBe(parentUuid);
+    expect(r.sanitized.severity).toBe('High');
+  });
+});

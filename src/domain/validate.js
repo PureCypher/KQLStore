@@ -265,6 +265,25 @@ function validateQuery(query) {
   // Detection metadata (schema v4) — optional; absent keys are simply not written back.
   Object.assign(sanitized, validateDetectionMetadata(query, errors));
 
+  // Fork lineage. Written after the metadata merge so nothing merged in can shadow it,
+  // the same ordering the API's toFrontend uses and for the same reason.
+  //
+  // A bad pointer is dropped rather than failing the record: the fork's own content is
+  // still valid and still worth storing, and an unusable pointer to an ancestor is
+  // exactly as recoverable as no pointer at all.
+  //
+  // The UUID check is stricter than the API's, which bounds parentId by length and has
+  // no opinion on format. It is the right rule here because validateQuery already
+  // refuses a non-UUID `id`, so a non-UUID parentId could never resolve to a query in
+  // this store — keeping it would draw a fork badge pointing at something that cannot
+  // exist. parentName is cleared alongside it: the badge only renders when parentId is
+  // set, so a surviving name would be invisible dead weight on every round-trip.
+  const hasParent = typeof query.parentId === 'string' && UUID_REGEX.test(query.parentId);
+  sanitized.parentId = hasParent ? query.parentId : null;
+  sanitized.parentName = hasParent && typeof query.parentName === 'string'
+    ? query.parentName.trim().slice(0, 200)
+    : '';
+
   // Preserve timestamps
   sanitized.created = typeof query.created === 'string' ? query.created : new Date().toISOString();
   sanitized.updated = typeof query.updated === 'string' ? query.updated : new Date().toISOString();

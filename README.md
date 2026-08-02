@@ -5,7 +5,10 @@ Defender XDR. It gives them a home: a searchable, taggable, syntax-highlighted s
 your own infrastructure instead of in a wiki page, a OneNote tab, or forty browser bookmarks. Since
 schema v4 it also holds the metadata that makes a query a *detection* — ATT&CK mapping, severity,
 entity mappings, false positives, tuning notes — and can export the result as Sentinel analytics
-rules or an ATT&CK Navigator layer.
+rules or an ATT&CK Navigator layer. A query can be **forked** into a variant that remembers where it
+came from, and a second store holds **table schemas** — pasted `getschema` output plus the
+operational notes a schema alone can't carry — as a reference alongside the queries, not a
+replacement for anything that drives them.
 
 **It is still not a content feed.** There is no upstream to sync from, no rule packs and no
 connection to Microsoft. Beyond the 15-query [starter pack](docs/starter-pack.md), which is a set of
@@ -56,6 +59,11 @@ at runtime, which is what makes the strict Content-Security-Policy in `nginx.con
 The API Deployment is single-replica with a `Recreate` strategy and **must never be scaled above
 one**: the store is a single SQLite file on a ReadWriteOnce volume, which binds to one node and
 tolerates exactly one writer. Scaling out means replacing SQLite, not adding replicas.
+
+`/api/schemas` is not a separate service — it is routes on this same Express app, in the same
+`kqlstore-api` Deployment, reading and writing `table_schemas` in the same `kqlstore.db` file on the
+same PVC as `queries`. No new Deployment, Service, or claim was added for it; the schema store
+inherits the single-writer constraint above for the same reason the query store does.
 
 | Path | What it is |
 | --- | --- |
@@ -207,6 +215,31 @@ over time.
 **The full field table, with types, bounds and accepted values, is in
 [docs/schema.md](docs/schema.md)**, along with the migration chain and the exact semantics of a
 validation failure.
+
+## Forking
+
+A query card's fork action opens a new editor draft that is a full copy of the original — including
+its v4 detection metadata — with a fresh id and a `parentId`/`parentName` pointing back at it.
+Nothing is written until that draft is saved. The fork badge and the sidebar's Forks / Parents /
+Orphans filters read this lineage client-side; there is no server-side ancestry table to keep in
+sync, and none is needed since the SPA already holds the whole store.
+
+**Deleting a parent does not touch its forks.** `parentId` is deliberately not a foreign key: an
+unresolvable parent is a display state — "forked from a query that no longer exists" — not an
+integrity error, and the fork's own content is exactly as valid as it was before. See
+[docs/schema.md](docs/schema.md#core-fields) for the field bounds and the full reasoning.
+
+## Table schemas
+
+A second store, next to the query library: paste `TableName | getschema` output from the portal and
+it is parsed, stored, and searchable, with a notes field for the things a schema alone can't say —
+retention windows, columns that are only conditionally populated, DCR version history.
+
+**It is additive and does not drive the application.** The table badges, the sidebar's table
+filter, the table picker and the linter all still read the hardcoded lists in
+[`src/constants.js`](src/constants.js), unchanged by this feature. Editing or deleting a schema
+changes only what the Schemas tab shows. What the store is for, the three paste formats it accepts,
+and why that separation is deliberate: [docs/schemas.md](docs/schemas.md).
 
 ## Exports
 
@@ -439,6 +472,7 @@ Stated plainly, so none of it is a surprise later.
 | | |
 | --- | --- |
 | [docs/schema.md](docs/schema.md) | Every field, its type, its bounds and its accepted values; how the record is stored; the migration chain |
+| [docs/schemas.md](docs/schemas.md) | The table schema store: what it's for, why it's additive, the accepted paste formats |
 | [docs/api.md](docs/api.md) | Endpoints, bounds, import modes, optimistic concurrency, error shapes |
 | [docs/exports.md](docs/exports.md) | The three export formats, what they map and what they cannot do |
 | [docs/kql-linter.md](docs/kql-linter.md) | Every lint rule, its severity, and what it deliberately ignores |

@@ -6,6 +6,7 @@ import { getTableDisplayName } from './domain/tables.js';
 import { validateQuery } from './domain/validate.js';
 import { migrateData } from './domain/migrate.js';
 import { simpleHash } from './domain/hash.js';
+import { makeFork, indexById, childrenOf, matchesLineageFilter } from './domain/lineage.js';
 import { safeJsonParse } from './lib/json.js';
 import { StorageAdapter } from './storage/adapter.js';
 import { useKQLStorage } from './storage/useKQLStorage.js';
@@ -23,6 +24,7 @@ import { SidebarContent } from './components/SidebarContent.jsx';
 import { ImportPreviewModal } from './components/ImportPreviewModal.jsx';
 import { BulkActionBar } from './components/BulkActionBar.jsx';
 import { SavingIndicator } from './components/SavingIndicator.jsx';
+import { SchemaView } from './components/SchemaView.jsx';
 
 export default function App() {
   const storage = useKQLStorage();
@@ -36,6 +38,17 @@ export default function App() {
     stats,
   } = storage;
 
+  // No router: the app has exactly two top-level views, switched by hand. A router
+  // pulls in URL handling this deployment does not use and was never asked to change.
+  const [view, setView] = useState('queries');
+  // Owned here, not inside SchemaView: only one tabpanel is ever mounted at a time (see
+  // the `view === 'schemas'` block below), so state that lived inside SchemaView was
+  // destroyed every time the user switched to the Queries tab and back — a pasted
+  // getschema dump and hand-typed notes vanished on an incidental tab check. Lifting the
+  // three form fields here means SchemaView unmounting no longer means losing them.
+  const [schemaNameInput, setSchemaNameInput] = useState('');
+  const [schemaPasteText, setSchemaPasteText] = useState('');
+  const [schemaNotesInput, setSchemaNotesInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebounce(searchTerm, 250);
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -43,6 +56,7 @@ export default function App() {
   const [tableFilterExpanded, setTableFilterExpanded] = useState({ sentinel: true, defender: true, custom: true });
   const [selectedTags, setSelectedTags] = useState([]);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [lineageFilter, setLineageFilter] = useState(null);
   const [sortBy, setSortBy] = useState('updated');
   const [sortDir, setSortDir] = useState('desc');
   const [editingQuery, setEditingQuery] = useState(null);
@@ -54,6 +68,13 @@ export default function App() {
   const [importPreview, setImportPreview] = useState(null); // {text, preview} for import preview modal
   const [toasts, setToasts] = useState([]);
   const mobileSidebarTitleId = useId();
+  const tabBaseId = useId();
+  const tabIds = {
+    queriesTab: `${tabBaseId}-queries-tab`,
+    queriesPanel: `${tabBaseId}-queries-panel`,
+    schemasTab: `${tabBaseId}-schemas-tab`,
+    schemasPanel: `${tabBaseId}-schemas-panel`,
+  };
   const searchRef = useRef(null);
   const fileInputRef = useRef(null);
   const toastIdRef = useRef(0);
@@ -115,6 +136,19 @@ export default function App() {
     const ok = await storage.saveQuery(dup);
     addToast(ok ? 'Query duplicated' : 'Duplicate saved locally only — API unreachable', ok ? 'success' : 'error');
   }, [storage, addToast]);
+
+  // Lineage maps are derived from `queries` client-side rather than denormalised into the
+  // database, so they only need to stay in sync with a value already in state.
+  const lineage = useMemo(
+    () => ({ byId: indexById(queries), forkIndex: childrenOf(queries) }),
+    [queries],
+  );
+
+  // Forking opens a draft in the editor rather than writing immediately — the draft's id
+  // is not yet in `queries`, so nothing is persisted until the user saves.
+  const forkQuery = useCallback((source) => {
+    setEditingQuery(makeFork(source, generateId(), new Date().toISOString()));
+  }, []);
 
   // --- Import / Export ---
   const handleExport = useCallback((exportQueries = null) => {
@@ -293,14 +327,25 @@ export default function App() {
         e.preventDefault();
         setShowKeyboardHelp((p) => !p);
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        searchRef.current?.focus();
+
+      // Ctrl/Cmd+K (focus search) and Ctrl/Cmd+N (new query) both act on things that only
+      // exist on the Queries tab: searchRef is the search box rendered by SidebarContent,
+      // which is unmounted while view !== 'queries', so +K silently focused nothing; +N
+      // opened the query editor on top of whatever the Schemas tab was showing, including
+      // over an in-progress schema paste. Scoping both to the Queries tab fixes both —
+      // this handler was written before the Schemas tab existed and never learned about
+      // `view`, which is also why `view` is now in the dependency array below.
+      if (view === 'queries') {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          searchRef.current?.focus();
+        }
+        if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !inInput) {
+          e.preventDefault();
+          setEditingQuery({});
+        }
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !inInput) {
-        e.preventDefault();
-        setEditingQuery({});
-      }
+
       if (e.key === 'Escape') {
         if (importPreview) setImportPreview(null);
         else if (showInspector) setShowInspector(false);
@@ -312,7 +357,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [editingQuery, showKeyboardHelp, searchTerm, showMobileSidebar, showInspector, importPreview]);
+  }, [editingQuery, showKeyboardHelp, searchTerm, showMobileSidebar, showInspector, importPreview, view]);
 
   // --- Filtering & Sorting ---
   const allTags = useMemo(() => {
@@ -345,6 +390,7 @@ export default function App() {
     if (selectedTable) result = result.filter((q) => q.table === selectedTable);
     if (selectedTags.length > 0) result = result.filter((q) => selectedTags.every((t) => (q.tags || []).includes(t)));
     if (showFavoritesOnly) result = result.filter((q) => q.favorite);
+    if (lineageFilter) result = result.filter((q) => matchesLineageFilter(q, lineageFilter, lineage.forkIndex, lineage.byId));
     return [...result].sort((a, b) => {
       let cmp = 0;
       if (sortBy === 'name') cmp = a.name.localeCompare(b.name);
@@ -355,7 +401,7 @@ export default function App() {
       else if (sortBy === 'category') cmp = (a.category || '').localeCompare(b.category || '');
       return sortDir === 'desc' ? -cmp : cmp;
     });
-  }, [queries, debouncedSearch, selectedCategory, selectedTable, selectedTags, showFavoritesOnly, sortBy, sortDir]);
+  }, [queries, debouncedSearch, selectedCategory, selectedTable, selectedTags, showFavoritesOnly, lineageFilter, lineage, sortBy, sortDir]);
 
   // --- Clipboard ---
   // navigator.clipboard only exists in a secure context. Over plain HTTP on a non-localhost
@@ -408,10 +454,10 @@ export default function App() {
 
   const clearFilters = useCallback(() => {
     setSearchTerm(''); setSelectedCategory(null); setSelectedTable(null);
-    setSelectedTags([]); setShowFavoritesOnly(false);
+    setSelectedTags([]); setShowFavoritesOnly(false); setLineageFilter(null);
   }, []);
 
-  const hasActiveFilters = selectedCategory || selectedTable || selectedTags.length > 0 || showFavoritesOnly || debouncedSearch;
+  const hasActiveFilters = selectedCategory || selectedTable || selectedTags.length > 0 || showFavoritesOnly || debouncedSearch || lineageFilter;
 
   // Every value the hoisted shell components read. Memoised so the identity only changes
   // when something they actually use changes.
@@ -420,12 +466,13 @@ export default function App() {
     showKeyboardHelp, setShowKeyboardHelp,
     editingQuery, setEditingQuery, saveQuery,
     copyToClipboard,
-    deleteQuery, duplicateQuery, toggleFavorite, toggleExpand, toggleSelect,
+    deleteQuery, duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect,
     selectedIds, setSelectedIds, selectedTags, setSelectedTags,
     queries, stats, allTags, categoryCounts,
     searchRef, searchTerm, setSearchTerm,
     selectedCategory, setSelectedCategory, selectedTable, setSelectedTable,
     showFavoritesOnly, setShowFavoritesOnly,
+    lineageFilter, setLineageFilter,
     sortBy, setSortBy, sortDir, setSortDir,
     tableFilterExpanded, setTableFilterExpanded,
     hasActiveFilters, clearFilters,
@@ -435,9 +482,9 @@ export default function App() {
     expandedIds,
   }), [
     toasts, showKeyboardHelp, editingQuery, saveQuery, copyToClipboard, deleteQuery,
-    duplicateQuery, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
+    duplicateQuery, forkQuery, lineage, toggleFavorite, toggleExpand, toggleSelect, selectedIds, selectedTags,
     queries, stats, allTags, categoryCounts, searchTerm, selectedCategory, selectedTable,
-    showFavoritesOnly, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
+    showFavoritesOnly, lineageFilter, sortBy, sortDir, tableFilterExpanded, hasActiveFilters, clearFilters,
     importPreview, confirmImport, handleBulkDelete, handleBulkExport, handleBulkCategory,
     handleBulkTable, savingState, expandedIds, searchRef,
   ]);
@@ -472,7 +519,7 @@ export default function App() {
             other overlays: a focus trap, Escape to close, and focus returned to the button
             that opened it. It was previously a bare div, so a keyboard or screen-reader
             user could tab straight through it into the cards underneath. */}
-        {showMobileSidebar && (
+        {view === 'queries' && showMobileSidebar && (
           <Modal
             labelledBy={mobileSidebarTitleId}
             onClose={() => setShowMobileSidebar(false)}
@@ -493,37 +540,78 @@ export default function App() {
           </Modal>
         )}
 
-        {/* Desktop sidebar */}
-        <aside className="hidden lg:block w-72 shrink-0 h-full overflow-hidden" style={{ borderRight: '1px solid #1e1e2e' }}>
-          <SidebarContent />
-        </aside>
+        {/* Desktop sidebar — query filters only; the schema view has no use for them. */}
+        {view === 'queries' && (
+          <aside className="hidden lg:block w-72 shrink-0 h-full overflow-hidden" style={{ borderRight: '1px solid #1e1e2e' }}>
+            <SidebarContent />
+          </aside>
+        )}
 
         {/* Main content */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Header */}
           <header className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: '1px solid #1e1e2e', background: '#0d0d14' }}>
             <div className="flex items-center gap-3">
-              <button onClick={() => setShowMobileSidebar(true)} aria-label="Open filters" title="Filters" className="lg:hidden p-1.5 rounded-md hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
-                <Filter size={16} className="text-gray-400" />
-              </button>
+              {view === 'queries' && (
+                <button onClick={() => setShowMobileSidebar(true)} aria-label="Open filters" title="Filters" className="lg:hidden p-1.5 rounded-md hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]">
+                  <Filter size={16} className="text-gray-400" />
+                </button>
+              )}
               <h1 className="text-lg font-bold tracking-tight">
                 <span style={{ color: '#00ff88' }}>&gt;</span> <span className="text-gray-200">kql_store</span>
               </h1>
-              <span className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
-                style={{ background: '#1a1a2e', color: '#00d4ff', border: '1px solid #2a2a3e' }}>{queries.length} queries</span>
+              {view === 'queries' && (
+                <span className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
+                  style={{ background: '#1a1a2e', color: '#00d4ff', border: '1px solid #2a2a3e' }}>{queries.length} queries</span>
+              )}
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setEditingQuery({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
-                style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} /><span className="hidden sm:inline">New Query</span></button>
-              <button onClick={() => fileInputRef.current?.click()} aria-label="Import queries from a JSON file"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
-                style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Upload size={14} /><span className="hidden sm:inline">Import</span></button>
-              <ExportMenu queries={filteredQueries} onToast={addToast} />
-              <button onClick={() => setShowKeyboardHelp(true)} aria-label="Keyboard shortcuts" className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Keyboard shortcuts (?)">
-                <Keyboard size={14} className="text-gray-500" />
-              </button>
-            </div>
+            {view === 'queries' && (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setEditingQuery({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
+                  style={{ background: '#00ff88', color: '#0a0a0f' }}><Plus size={14} /><span className="hidden sm:inline">New Query</span></button>
+                <button onClick={() => fileInputRef.current?.click()} aria-label="Import queries from a JSON file"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs hover:bg-white/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+                  style={{ border: '1px solid #2a2a3e', color: '#aaa' }}><Upload size={14} /><span className="hidden sm:inline">Import</span></button>
+                <ExportMenu queries={filteredQueries} onToast={addToast} />
+                <button onClick={() => setShowKeyboardHelp(true)} aria-label="Keyboard shortcuts" className="p-1.5 rounded-md hover:bg-white/5 hidden sm:block focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]" title="Keyboard shortcuts (?)">
+                  <Keyboard size={14} className="text-gray-500" />
+                </button>
+              </div>
+            )}
           </header>
+
+          {/* View switch. The app has exactly two top-level views and no router — see
+              the note by the `view` state above. */}
+          <div role="tablist" aria-label="View" className="flex items-center gap-1 px-4 pt-2 shrink-0" style={{ background: '#0d0d14', borderBottom: '1px solid #1e1e2e' }}>
+            <button
+              role="tab"
+              id={tabIds.queriesTab}
+              aria-selected={view === 'queries'}
+              aria-controls={tabIds.queriesPanel}
+              onClick={() => setView('queries')}
+              className="px-3 py-1.5 text-xs rounded-t-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+              style={{
+                background: view === 'queries' ? '#12121a' : 'transparent',
+                color: view === 'queries' ? '#00ff88' : '#9ca3af',
+                border: `1px solid ${view === 'queries' ? '#2a2a3e' : 'transparent'}`,
+                borderBottom: view === 'queries' ? '1px solid #12121a' : '1px solid transparent',
+              }}
+            >Queries</button>
+            <button
+              role="tab"
+              id={tabIds.schemasTab}
+              aria-selected={view === 'schemas'}
+              aria-controls={tabIds.schemasPanel}
+              onClick={() => setView('schemas')}
+              className="px-3 py-1.5 text-xs rounded-t-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#00d4ff]"
+              style={{
+                background: view === 'schemas' ? '#12121a' : 'transparent',
+                color: view === 'schemas' ? '#00ff88' : '#9ca3af',
+                border: `1px solid ${view === 'schemas' ? '#2a2a3e' : 'transparent'}`,
+                borderBottom: view === 'schemas' ? '1px solid #12121a' : '1px solid transparent',
+              }}
+            >Schemas</button>
+          </div>
 
           {/* Storage error banner */}
           {storageError && (
@@ -540,7 +628,9 @@ export default function App() {
           )}
 
           {/* Query list */}
-          <div className="flex-1 overflow-y-auto p-4" style={{ paddingBottom: showInspector ? 'calc(50vh + 16px)' : undefined }}>
+          {view === 'queries' && (
+          <div role="tabpanel" id={tabIds.queriesPanel} aria-labelledby={tabIds.queriesTab}
+            className="flex-1 overflow-y-auto p-4" style={{ paddingBottom: showInspector ? 'calc(50vh + 16px)' : undefined }}>
             {filteredQueries.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-center">
                 {queries.length === 0 ? (
@@ -569,6 +659,17 @@ export default function App() {
               </div>
             )}
           </div>
+          )}
+
+          {view === 'schemas' && (
+            <div role="tabpanel" id={tabIds.schemasPanel} aria-labelledby={tabIds.schemasTab} className="flex-1 flex flex-col min-w-0 overflow-hidden">
+              <SchemaView
+                nameInput={schemaNameInput} setNameInput={setSchemaNameInput}
+                pasteText={schemaPasteText} setPasteText={setSchemaPasteText}
+                notesInput={schemaNotesInput} setNotesInput={setSchemaNotesInput}
+              />
+            </div>
+          )}
 
           {/* Status bar */}
           <footer className="hidden sm:flex items-center justify-between px-4 py-1.5 text-xs font-mono shrink-0"

@@ -180,6 +180,53 @@ const StorageAdapter = {
     }
   },
 
+  // ---- Schema methods (table_schemas — source of truth) ----
+
+  async fetchSchemas() {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/schemas`, { credentials: 'include' });
+      if (!res.ok) throw await apiError(res);
+      const data = await res.json();
+      operationLog.add({ type: 'API_FETCH_SCHEMAS', key: 'schemas', success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_FETCH_SCHEMAS', key: 'schemas', success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async saveSchema(name, payload) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/schemas/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      });
+      if (!res.ok) throw await apiError(res);
+      const data = await res.json();
+      operationLog.add({ type: 'API_SAVE_SCHEMA', key: name, success: true, latencyMs: Date.now() - start });
+      return data;
+    } catch (e) {
+      operationLog.add({ type: 'API_SAVE_SCHEMA', key: name, success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
+  async deleteSchema(name) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/schemas/${encodeURIComponent(name)}`, { method: 'DELETE', credentials: 'include' });
+      if (!res.ok) throw await apiError(res);
+      operationLog.add({ type: 'API_DELETE_SCHEMA', key: name, success: true, latencyMs: Date.now() - start });
+    } catch (e) {
+      operationLog.add({ type: 'API_DELETE_SCHEMA', key: name, success: false, latencyMs: Date.now() - start, error: e.message });
+      throw e;
+    }
+  },
+
   // ---- localStorage cache methods (fast path + offline) ----
 
   getCachedData() {

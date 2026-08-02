@@ -1,18 +1,23 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Copy, Pencil, Trash2, Star, Clock, Layers, Square, CheckSquare } from 'lucide-react';
+import { Copy, Pencil, Trash2, Star, Clock, Layers, Square, CheckSquare, GitFork } from 'lucide-react';
 import { CATEGORY_COLORS, TABLE_STYLES } from '../constants.js';
 import { getTableDisplayName, getTableGroup } from '../domain/tables.js';
+import { isOrphan } from '../domain/lineage.js';
 import { CodeBlock } from './CodeBlock.jsx';
 import { QueryDescription } from './QueryDescription.jsx';
 import { useApp } from '../context/app.js';
 import { FOCUS_RING } from './a11y.jsx';
 
 const QueryCard = React.memo(({ query }) => {
-  const { copyToClipboard, deleteQuery, duplicateQuery, selectedIds, selectedTags, setEditingQuery, setSelectedTags, toggleExpand, toggleFavorite, toggleSelect } = useApp();
+  const { copyToClipboard, deleteQuery, duplicateQuery, forkQuery, lineage, selectedIds, selectedTags, setEditingQuery, setSelectedTags, toggleExpand, toggleFavorite, toggleSelect } = useApp();
   const isSelected = selectedIds.has(query.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const clickTimer = useRef(null);
   const confirmRef = useRef(null);
+
+  const parentQuery = query.parentId ? lineage.byId.get(query.parentId) ?? null : null;
+  const orphaned = isOrphan(query, lineage.byId);
+  const forkCount = (lineage.forkIndex.get(query.id) || []).length;
 
   // Arming the confirmation unmounts the button that was focused, which drops focus to
   // <body> and leaves a keyboard user with no indication that a destructive prompt just
@@ -77,6 +82,10 @@ const QueryCard = React.memo(({ query }) => {
             aria-label={`Edit ${query.name}`} title="Edit"><Pencil size={14} className="text-gray-500 hover:text-gray-300" aria-hidden="true" /></button>
           <button onClick={() => duplicateQuery(query)} className={`p-1.5 rounded-md hover:bg-white/5 ${FOCUS_RING}`}
             aria-label={`Duplicate ${query.name}`} title="Duplicate"><Layers size={14} className="text-gray-500 hover:text-gray-300" aria-hidden="true" /></button>
+          <button type="button" onClick={() => forkQuery(query)} title="Fork this query"
+            aria-label={`Fork ${query.name}`} className={`p-1.5 rounded-md hover:bg-white/5 ${FOCUS_RING}`}>
+            <GitFork size={14} className="text-gray-500 hover:text-gray-300" aria-hidden="true" />
+          </button>
           {confirmDelete ? (
             <div className="flex items-center gap-1">
               <button ref={confirmRef} onClick={() => { deleteQuery(query.id); setConfirmDelete(false); }}
@@ -107,6 +116,26 @@ const QueryCard = React.memo(({ query }) => {
         {/* text-gray-600 measured at 2.46:1 on the card surface; the table, category,
             usage count and date in this row are all information, not decoration. */}
         <span className="ml-auto flex items-center gap-3 text-gray-400 flex-wrap">
+          {query.parentId && (
+            <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+              <GitFork size={12} aria-hidden="true" />
+              forked from{' '}
+              {orphaned ? (
+                <span>{query.parentName || 'a query'} (deleted)</span>
+              ) : (
+                <button type="button" onClick={() => setEditingQuery(parentQuery)}
+                  className={`underline hover:text-slate-200 rounded ${FOCUS_RING}`}>
+                  {parentQuery.name}
+                </button>
+              )}
+            </span>
+          )}
+          {forkCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+              <GitFork size={12} aria-hidden="true" />
+              {forkCount} {forkCount === 1 ? 'fork' : 'forks'}
+            </span>
+          )}
           {query.table && (() => {
             const group = getTableGroup(query.table);
             const style = TABLE_STYLES[group];

@@ -38,9 +38,21 @@ const LIMITS = {
   // Upper bound for ?limit=. A full store is a few thousand rows, so this is generous
   // while still stopping a single request from materialising an unbounded result set.
   pageSize: 1000,
+  schemaName: 200,
+  schemaColumns: 500,
+  schemaColumnName: 200,
+  schemaNotes: 5000,
 };
 
 const IMPORT_MODES = ['insert', 'upsert'];
+
+// UUID v4, format only — deliberately mirrors UUID_REGEX in src/constants.js. api/ cannot
+// import from src/ (they ship and run separately), so this is redefined rather than shared,
+// but the two must agree on what a valid parentId looks like: every id in this store is a
+// UUID v4 (see validateSyncFields / uuidv4() in routes/queries.js), so a parentId the SPA
+// would reject can never resolve to a row here either. Diverging would let a value pass one
+// validator and fail the other on the same payload.
+const PARENT_ID_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function badRequest(message) {
   const err = new Error(message);
@@ -162,6 +174,37 @@ function validateQueryPayload(body, { partial = false } = {}) {
   const usageCount = checkUsageCount(body.usageCount);
   if (usageCount !== undefined) out.usageCount = usageCount;
 
+  // Fork lineage. parentId is bounded by LIMITS.id because it holds the same kind of
+  // value the id column does; parentName by LIMITS.name because it is a copy of one.
+  //
+  // Resolvability is still not checked here: whether the parent still exists is a question
+  // about the store rather than about the payload, and "no" is a legitimate answer — an
+  // import can carry a fork whose parent was never exported, and a fork outlives the query
+  // it came from by design (see the comment on the columns in db.js).
+  //
+  // Format IS checked, and it is the same UUID v4 rule src/domain/validate.js applies on
+  // the SPA side. Before this, the two disagreed: the API stored any string up to 200
+  // characters, so a hand-edited or legacy non-UUID parentId could reach the row here even
+  // though the SPA would refuse to keep it past the next save — a fork badge the UI showed
+  // the user would then vanish the moment they did something as innocuous as copying the
+  // query, with no warning. A non-UUID parentId is DROPPED rather than failing the request:
+  // rejecting the payload would turn one hand-edited pointer in a 200-row import into a
+  // 400 for the whole batch, and a pointer that can never resolve to a row in this store
+  // (every id here is a UUID) is exactly as recoverable as no pointer at all — the same
+  // reasoning validateQuery already documents. parentName is dropped with it: the fork
+  // badge only renders when parentId is set, so a surviving name with no id would be dead
+  // weight on every read.
+  const rawParentId = checkString(body.parentId, 'parentId', LIMITS.id, { required: false });
+  const rawParentName = checkString(body.parentName, 'parentName', LIMITS.name, { required: false });
+  if (rawParentId !== undefined && PARENT_ID_UUID_REGEX.test(rawParentId)) {
+    out.parentId = rawParentId;
+    if (rawParentName !== undefined) out.parentName = rawParentName;
+  } else if (rawParentId === undefined && rawParentName !== undefined) {
+    // No parentId in this payload at all (not even an invalid one) — parentName can still
+    // travel on its own, e.g. a partial PUT that only touches the name snapshot.
+    out.parentName = rawParentName;
+  }
+
   const metadata = checkMetadata(collectMetadata(body));
   if (metadata !== undefined) out.metadata = metadata;
 
@@ -241,15 +284,69 @@ function validatePagination(query) {
   };
 }
 
+const SCHEMA_SOURCES = ['getschema', 'manual', 'import'];
+
+/**
+ * Validate a table schema. Columns are returned already serialised, because every caller
+ * binds them straight into SQLite and re-stringifying at each call site is how the two
+ * sides drift apart.
+ *
+ * A missing column type is defaulted rather than rejected: `getschema` output pasted from
+ * the portal sometimes loses the type column to a copy that clipped it, and a column list
+ * without types is still far more useful to a reader than no schema at all.
+ */
+function validateSchemaPayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw badRequest('request body must be a JSON object');
+  }
+
+  const name = checkString(body.name, 'name', LIMITS.schemaName, { required: true });
+
+  if (body.columns !== undefined && !Array.isArray(body.columns)) {
+    throw badRequest('"columns" must be an array');
+  }
+  const raw = body.columns || [];
+  if (raw.length > LIMITS.schemaColumns) {
+    throw badRequest(`"columns" exceeds ${LIMITS.schemaColumns} entries`);
+  }
+
+  const columns = raw.map((col) => {
+    if (!col || typeof col !== 'object' || Array.isArray(col)) {
+      throw badRequest('every column must be an object');
+    }
+    if (typeof col.name !== 'string' || !col.name.trim()) {
+      throw badRequest('every column needs a "name"');
+    }
+    if (col.name.length > LIMITS.schemaColumnName) {
+      throw badRequest(`a column name exceeds ${LIMITS.schemaColumnName} characters`);
+    }
+    return {
+      name: col.name.trim(),
+      type: typeof col.type === 'string' && col.type.trim() ? col.type.trim() : 'unknown',
+    };
+  });
+
+  const notes = checkString(body.notes, 'notes', LIMITS.schemaNotes, { required: false }) ?? '';
+
+  const source = body.source ?? 'getschema';
+  if (!SCHEMA_SOURCES.includes(source)) {
+    throw badRequest(`"source" must be one of: ${SCHEMA_SOURCES.join(', ')}`);
+  }
+
+  return { name: name.trim(), columns: JSON.stringify(columns), notes, source };
+}
+
 module.exports = {
   validateQueryPayload,
   validateSyncFields,
   validateImportMode,
   validateExpectedUpdated,
   validatePagination,
+  validateSchemaPayload,
   badRequest,
   CATEGORIES,
   IMPORT_MODES,
   LIMITS,
+  SCHEMA_SOURCES,
   SCHEMA_VERSION,
 };

@@ -37,8 +37,14 @@ function unredactDeep(value, applied) {
 /** Split a streamed NDJSON body into JSON events, tolerating lines split across chunks. */
 async function* readEvents(body) {
   let buffer = '';
+  // undici's fetch yields plain Uint8Array chunks, never Buffer. Buffer.isBuffer()
+  // was false for every real chunk, String(chunk) rendered them as comma-joined byte
+  // values, and every line failed JSON.parse — the stream came back empty in
+  // production while Buffer-based test mocks passed. TextDecoder handles Buffer,
+  // Uint8Array and multi-byte UTF-8 split across chunk boundaries.
+  const decoder = new TextDecoder();
   for await (const chunk of body) {
-    buffer += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
     let idx;
     while ((idx = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, idx).trim();

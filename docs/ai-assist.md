@@ -46,6 +46,11 @@ free-text `notes` — which is the part that makes the difference between plausi
 KQL. The system prompt tells the model to use only columns that appear in the supplied schemas and
 to say so plainly when a needed column is absent rather than inventing one.
 
+The filtering is why a turn is cheap: with a ~264-table store, a measured chat request carries
+about 7 KB of schema payload, against the ~519 KB the panel sent per turn when it shipped the
+entire store. If the model seems not to know a table's columns, the fix is conversational, not
+configuration: name the table in a message and its schema travels with the next turn.
+
 **Not sent:** the marker→original mapping (it stays on the client for the conversation), the API
 key, and anything that scans as a credential.
 

@@ -69,6 +69,29 @@ kubectl -n kqlstore exec deploy/kqlstore-ai -- \
 `200` means the network and the key both work. `401` means the key is wrong but the
 network is right. A hang means the egress rule or DNS is wrong.
 
+## Verifying the assistant end to end
+
+Egress answering is not the same as the assistant working — a stream-decoding bug once
+returned empty 200s while every network check passed. The probe that catches the whole
+chain (schemas reach the model, the model's reply reaches the panel) is a **grounding
+test against an obscure table**:
+
+1. `kubectl -n kqlstore port-forward svc/kqlstore 18080:80` and open the app locally.
+2. New Query → Assist with AI → ask for a hunt on a table the model cannot know from
+   training but the schema store holds — `ZTSGraph` is a good pick; its distinctive
+   columns are `FlowDirection`, `LocalIdentifier`, `RemoteIdentifier`, `PacketLastSeenAt`.
+3. Approve the redaction preview. A correct result proposes a query using those real
+   columns and invents none. Wrong columns (or no reply at all) mean the schemas are not
+   reaching the model or the stream is not reaching the panel.
+4. **Discard the proposal and Cancel the draft.** The test must not save anything;
+   confirm the query count afterwards if in doubt.
+
+Since the relevance filtering landed (see [docs/ai-assist.md](../ai-assist.md)), a chat
+turn carries only the schemas the conversation names — measured at ~7 KB against the
+~519 KB the panel sent when it shipped the whole store. To see what a turn actually sends,
+watch the `/api/ai/chat` request body in the browser's network tab: `schemas` should list
+only the named tables, `knownTables` the bare names of the rest.
+
 ## Rotating `OLLAMA_API_KEY`
 
 The key is injected as an environment variable at container start, so rotation is:

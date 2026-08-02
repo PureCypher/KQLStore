@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseAzureMonitorTable, parseDefenderTable, buildImportRows } from '../fetch-schemas.js';
+import { parseAzureMonitorTable, parseDefenderTable, buildImportRows, mergeExistingNotes } from '../fetch-schemas.js';
 
 // Modelled on the real generated format of
 // azure-monitor-docs/articles/azure-monitor/reference/tables/signinlogs.md.
@@ -232,5 +232,71 @@ describe('buildImportRows', () => {
     expect(row.columns).toHaveLength(500);
     expect(row.notes.length).toBeLessThanOrEqual(5000);
     expect(row.notes).toContain('Column list truncated to 500 of 512 columns.');
+  });
+});
+
+describe('mergeExistingNotes', () => {
+  const generated = (over = {}) => ({
+    name: 'SigninLogs',
+    columns: [{ name: 'TimeGenerated', type: 'datetime' }],
+    notes: [
+      'Categories: Azure Resources, Security',
+      'https://learn.microsoft.com/azure/azure-monitor/reference/tables/signinlogs',
+      'Scraped from Microsoft Learn on 2026-09-01.',
+    ].join('\n'),
+    ...over,
+  });
+  const CURATED = 'Column preference: CreatedDateTime is the sign-in initiation time.';
+
+  test('carries a curated note line forward onto the regenerated row', () => {
+    const existing = [{ name: 'SigninLogs', notes: `Categories: Security\nScraped from Microsoft Learn on 2026-08-02.\n${CURATED}` }];
+    const [row] = mergeExistingNotes([generated()], existing);
+    expect(row.notes.endsWith(CURATED)).toBe(true);
+    expect(row.notes).toContain('Scraped from Microsoft Learn on 2026-09-01.');
+    expect(row.notes).not.toContain('2026-08-02');
+  });
+
+  test('drops every scraper-generated line variant from the existing notes', () => {
+    const existing = [{
+      name: 'SigninLogs',
+      notes: [
+        'Categories: Old, Stale',
+        'https://learn.microsoft.com/defender-xdr/advanced-hunting-signinlogs-table',
+        'Scraped from Microsoft Learn on 2025-01-01.',
+        "Sentinel's streamed copy of this table also carries TimeGenerated.",
+        'Column list truncated to 500 of 512 columns.',
+        CURATED,
+      ].join('\n'),
+    }];
+    const [row] = mergeExistingNotes([generated()], existing);
+    const appended = row.notes.slice(generated().notes.length);
+    expect(appended.trim()).toBe(CURATED);
+  });
+
+  test('leaves rows without existing curated notes untouched', () => {
+    const rows = [generated()];
+    const merged = mergeExistingNotes(rows, [{ name: 'SigninLogs', notes: 'Scraped from Microsoft Learn on 2026-08-02.' }]);
+    expect(merged[0]).toBe(rows[0]);
+    expect(mergeExistingNotes(rows, [])[0]).toBe(rows[0]);
+    expect(mergeExistingNotes(rows, undefined)[0]).toBe(rows[0]);
+  });
+
+  test('does not duplicate a curated line the generated notes already contain', () => {
+    const row = generated({ notes: `${generated().notes}\n${CURATED}` });
+    const existing = [{ name: 'SigninLogs', notes: CURATED }];
+    const [merged] = mergeExistingNotes([row], existing);
+    expect(merged.notes.split(CURATED).length - 1).toBe(1);
+  });
+
+  test('keeps the merged notes under the 5000-character cap', () => {
+    const existing = [{ name: 'SigninLogs', notes: 'x'.repeat(6000) }];
+    const [row] = mergeExistingNotes([generated()], existing);
+    expect(row.notes.length).toBeLessThanOrEqual(5000);
+  });
+
+  test('matches existing rows by name only, ignoring unknown names', () => {
+    const existing = [{ name: 'SomeOtherTable', notes: CURATED }];
+    const [row] = mergeExistingNotes([generated()], existing);
+    expect(row.notes).not.toContain(CURATED);
   });
 });

@@ -107,6 +107,16 @@ describe('RedactionPreview', () => {
     cleanup();
   });
 
+  it('offers no override when there is nothing to redact', () => {
+    // Both buttons would send an identical payload, but the override additionally marks
+    // the session's provenance as "overridden" — an audit trail claiming a bypass that
+    // never happened.
+    open({ applied: [] });
+    expect(screen.queryByRole('button', { name: /send verbatim/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /^send$/i })).toBeTruthy();
+    cleanup();
+  });
+
   it('offers no override at all when the request is blocked for a secret', () => {
     open({ applied: [], blocked: true, secrets: [{ rule: 'AWS access key id', field: 'query' }] });
     expect(screen.queryByRole('button', { name: /send verbatim/i })).toBeNull();

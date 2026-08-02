@@ -100,6 +100,28 @@ test('includes the supplied schemas in the prompt', async () => {
   assert.ok(JSON.stringify(upstream.lastRequest.body).includes('OktaLogs'));
 });
 
+test('renders knownTables as a names-only line in the system prompt', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat({ ...baseBody, knownTables: ['DeviceEvents', 'ZTSGraph'] });
+  const system = upstream.lastRequest.body.messages[0].content;
+  assert.match(system, /Other tables that exist/);
+  assert.match(system, /DeviceEvents, ZTSGraph/);
+});
+
+test('omits the known-tables line when knownTables is absent or empty', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  assert.doesNotMatch(upstream.lastRequest.body.messages[0].content, /Other tables that exist/);
+});
+
+test('ignores non-string entries in knownTables', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat({ ...baseBody, knownTables: ['DeviceEvents', 42, null, { name: 'x' }] });
+  const system = upstream.lastRequest.body.messages[0].content;
+  assert.match(system, /DeviceEvents/);
+  assert.ok(!system.includes('42') && !system.includes('[object Object]'));
+});
+
 test('streams text chunks as NDJSON', async () => {
   upstream.reply = [
     JSON.stringify({ message: { content: 'Hel' }, done: false }),

@@ -309,12 +309,16 @@ Body:
 {
   "messages": [{ "role": "user", "content": "make this detect Okta" }],
   "schemas": [{ "name": "OktaLogs", "columns": [{ "name": "eventType", "type": "string" }], "notes": "" }],
+  "knownTables": ["SigninLogs", "DeviceEvents"],
   "draft": { "name": "Entra risky sign-in", "description": "…", "query": "…" },
   "allowVerbatim": false
 }
 ```
 
-The draft is redacted before it reaches the model (unless `allowVerbatim`), and the model's
+`schemas` carries full column lists for tables the conversation names; `knownTables` is bare
+names for the rest of the store, rendered as a names-only line in the system prompt (strings
+only, each ≤ 200 characters, capped at 1 000 — anything else is dropped, not rejected). The
+draft is redacted before it reaches the model (unless `allowVerbatim`), and the model's
 proposal is un-redacted before it comes back. A credential anywhere is refused with `422` even
 under the override. The response is NDJSON — text chunks first, then either a `proposal` or an
 `error` line:

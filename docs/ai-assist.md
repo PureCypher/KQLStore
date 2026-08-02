@@ -37,10 +37,14 @@ Three properties do the work, and each is a deliberate trade:
 ## What is sent, and what is not
 
 **Sent:** the query's `name`, `description` and `query`, redacted by default (see below); the
-operator's chat messages; and the table schemas selected for the conversation. Schemas carry column
-names, types and the free-text `notes` — which is the part that makes the difference between
-plausible KQL and correct KQL. The system prompt tells the model to use only columns that appear in
-the supplied schemas and to say so plainly when a needed column is absent rather than inventing one.
+operator's chat messages; and the table schemas relevant to the conversation. A table earns its
+full schema by being **named** — in the draft's table field, its query text, or any chat message
+(`src/domain/relevantSchemas.js` decides); every other stored table travels as a bare name that the
+system prompt lists so the model can still point at a table it was not given columns for, and
+naming it in the next message pulls its schema in. Schemas carry column names, types and the
+free-text `notes` — which is the part that makes the difference between plausible KQL and correct
+KQL. The system prompt tells the model to use only columns that appear in the supplied schemas and
+to say so plainly when a needed column is absent rather than inventing one.
 
 **Not sent:** the marker→original mapping (it stays on the client for the conversation), the API
 key, and anything that scans as a credential.

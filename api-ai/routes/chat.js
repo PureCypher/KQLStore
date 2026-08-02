@@ -80,6 +80,12 @@ router.post('/', async (req, res, next) => {
     const body = req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const schemas = Array.isArray(body.schemas) ? body.schemas : [];
+    // Bare table names for the system prompt's known-tables line. External input:
+    // keep strings only, and bound both count and length so a hostile payload cannot
+    // inflate the prompt.
+    const knownTables = (Array.isArray(body.knownTables) ? body.knownTables : [])
+      .filter((n) => typeof n === 'string' && n.length > 0 && n.length <= 200)
+      .slice(0, 1000);
     const draft = {
       name: typeof body.draft?.name === 'string' ? body.draft.name : '',
       description: typeof body.draft?.description === 'string' ? body.draft.description : '',
@@ -106,7 +112,7 @@ router.post('/', async (req, res, next) => {
       ? { redacted: draft, applied: [] }
       : redactFields(draft);
 
-    const system = { role: 'system', content: systemPrompt(schemas) };
+    const system = { role: 'system', content: systemPrompt(schemas, knownTables) };
     const draftMessage = {
       role: 'user',
       content: `Current draft:\nName: ${redacted.name}\nDescription: ${redacted.description}\nQuery:\n${redacted.query}`,

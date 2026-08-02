@@ -14,7 +14,7 @@
 // prose and travel as typed; the operational detail that matters — the query — is
 // redacted. A credential anywhere is refused by the server with no override.
 // ---------------------------------------------------------------------------
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { X, Send, Terminal } from 'lucide-react';
 import { StorageAdapter } from '../storage/adapter.js';
 import { reviewProposal } from '../domain/proposal.js';
@@ -22,6 +22,25 @@ import { selectRelevantSchemas } from '../domain/relevantSchemas.js';
 import { RedactionPreview } from './RedactionPreview.jsx';
 import { ProposalReview } from './ProposalReview.jsx';
 import { FOCUS_RING } from './a11y.jsx';
+
+// How close to the bottom still counts as "following along" for auto-scroll purposes.
+const SCROLL_STICK_PX = 40;
+
+// The wait between sending and the first word of the reply is not short and it is not
+// filled: this model emits reasoning tokens before answer tokens, and the service forwards
+// only `content`, so the browser genuinely receives nothing for several seconds. Without a
+// moving indicator that dead air is indistinguishable from a broken stream — which is
+// exactly how an earlier decoding bug survived a manual test.
+const ThinkingIndicator = () => (
+  <div className="flex items-center gap-1.5 px-2.5 py-1.5" role="status">
+    <span className="flex gap-1" aria-hidden="true">
+      <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: '#00ff88', animationDelay: '0ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: '#00ff88', animationDelay: '150ms' }} />
+      <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: '#00ff88', animationDelay: '300ms' }} />
+    </span>
+    <span className="text-xs" style={{ color: '#00ff88' }}>Thinking…</span>
+  </div>
+);
 
 const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
   const [messages, setMessages] = useState([]);
@@ -38,6 +57,24 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
   // Whether any send in this session used the verbatim override, and the operator's last
   // instruction — both travel with the accepted proposal for the provenance record.
   const overrideRef = useRef(false);
+  // The scrolling message area, and whether the operator is still pinned to the bottom of
+  // it. Auto-scrolling unconditionally would yank the view away from someone who scrolled
+  // up to re-read an earlier turn while the model is still writing.
+  const scrollRef = useRef(null);
+  const stickToBottomRef = useRef(true);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_STICK_PX;
+  };
+
+  // Follow the conversation as it grows: new messages, streamed text, and the moment the
+  // waiting indicator appears (which is what the operator is watching for).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages, streamText, streaming, review, gate]);
 
   const draftFields = () => ({
     name: draft?.name || '',
@@ -152,7 +189,8 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
+      <div ref={scrollRef} onScroll={onScroll}
+        className="flex-1 overflow-y-auto p-3 space-y-2 text-xs" aria-live="polite">
         {messages.length === 0 && !streamText && (
           <p className="text-gray-500">
             Ask the model to rewrite this query or its metadata. Proposals are reviewed before
@@ -177,6 +215,7 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
             </div>
           </div>
         )}
+        {streaming && !streamText && <ThinkingIndicator />}
         {error && (
           <p role="alert" className="text-xs" style={{ color: '#ff6b6b' }}>{error}</p>
         )}
@@ -240,9 +279,16 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
             <Send size={14} aria-hidden="true" />
           </button>
         </div>
-        <p className="text-[10px] mt-1 text-gray-600">
-          {streaming ? 'The model is responding…' : 'Enter to send. A redaction preview appears before anything leaves the cluster.'}
-        </p>
+        {/* While the model is working this line is the second signal, not the only one —
+            it is promoted out of 10px grey so it reads at a glance, and drops back to the
+            quiet hint once the turn is over. */}
+        {streaming ? (
+          <p className="text-xs mt-1" style={{ color: '#00ff88' }}>The model is responding…</p>
+        ) : (
+          <p className="text-[10px] mt-1 text-gray-600">
+            Enter to send. A redaction preview appears before anything leaves the cluster.
+          </p>
+        )}
       </div>
     </div>
   );

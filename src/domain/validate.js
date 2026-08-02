@@ -272,12 +272,15 @@ function validateQuery(query) {
   // still valid and still worth storing, and an unusable pointer to an ancestor is
   // exactly as recoverable as no pointer at all.
   //
-  // The UUID check is stricter than the API's, which bounds parentId by length and has
-  // no opinion on format. It is the right rule here because validateQuery already
-  // refuses a non-UUID `id`, so a non-UUID parentId could never resolve to a query in
-  // this store — keeping it would draw a fork badge pointing at something that cannot
-  // exist. parentName is cleared alongside it: the badge only renders when parentId is
-  // set, so a surviving name would be invisible dead weight on every round-trip.
+  // The UUID check mirrors the API's — both sides now enforce the same UUID v4 rule
+  // (see PARENT_ID_UUID_REGEX in api/validate.js), so a hand-edited or legacy non-UUID
+  // parentId can no longer pass one validator and fail the other on the same payload,
+  // drawing a fork badge that vanishes on the next round-trip. The rule is the right
+  // one here regardless: validateQuery already refuses a non-UUID `id`, so a non-UUID
+  // parentId could never resolve to a query in this store — keeping it would draw a fork
+  // badge pointing at something that cannot exist. parentName is cleared alongside it:
+  // the badge only renders when parentId is set, so a surviving name would be invisible
+  // dead weight on every round-trip.
   const hasParent = typeof query.parentId === 'string' && UUID_REGEX.test(query.parentId);
   sanitized.parentId = hasParent ? query.parentId : null;
   sanitized.parentName = hasParent && typeof query.parentName === 'string'

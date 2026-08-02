@@ -173,9 +173,13 @@ const SOURCES = {
 };
 
 // Shallow sparse clone: two git commands instead of ~1,200 rate-limited HTTP
-// fetches. Returns the checked-out sparse dir and the clone root to delete.
-function cloneSparse({ repo, sparsePath }) {
+// fetches. Returns the checked-out sparse dir. The temp root is registered in
+// cloneRoots immediately after creation — before either git command runs — so
+// a git failure (network, bad URL, sparse-checkout) still leaves the partial
+// clone dir queued for the caller's cleanup instead of leaking it.
+function cloneSparse({ repo, sparsePath }, cloneRoots) {
   const root = mkdtempSync(join(tmpdir(), 'kqlstore-schemas-'));
+  cloneRoots.push(root);
   execFileSync('git', ['clone', '--depth', '1', '--filter=blob:none', '--sparse', '--quiet', repo, root], { stdio: 'inherit' });
   execFileSync('git', ['-C', root, 'sparse-checkout', 'set', sparsePath], { stdio: 'inherit' });
   return { dir: join(root, sparsePath), root };
@@ -198,13 +202,11 @@ function main() {
   const cloneRoots = [];
   try {
     console.log('Cloning MicrosoftDocs/azure-monitor-docs (sparse)...');
-    const azureClone = cloneSparse(SOURCES.azure);
-    cloneRoots.push(azureClone.root);
+    const azureClone = cloneSparse(SOURCES.azure, cloneRoots);
     const azure = parseDirectory(azureClone.dir, /\.md$/, parseAzureMonitorTable);
 
     console.log('Cloning MicrosoftDocs/defender-docs (sparse)...');
-    const defenderClone = cloneSparse(SOURCES.defender);
-    cloneRoots.push(defenderClone.root);
+    const defenderClone = cloneSparse(SOURCES.defender, cloneRoots);
     const defender = parseDirectory(
       defenderClone.dir,
       /^advanced-hunting-.+-table\.md$/,

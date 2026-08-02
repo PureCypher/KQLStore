@@ -31,6 +31,7 @@ untouched, which is what allows the fields to be filled in over time rather than
 | `updated` | string | no | ISO 8601. Decides who wins an upsert, and backs the optional precondition on `PUT`. |
 | `parentId` | string \| null | no | UUID v4 of the query this was forked from, or `null`. **Not a foreign key**: deleting a parent neither cascades to nor blocks its forks, so a `parentId` that resolves to nothing is an expected state and renders as an orphaned fork. A value that is not a UUID is dropped rather than failing the record — see [The parentId format rule](#the-parentid-format-rule) below for where that is enforced and why. |
 | `parentName` | string | no | ≤ 200 characters. The parent's name **at fork time**, not a live reference. It is what lets an orphaned fork still say what it came from, so it is correct for it to go stale when the parent is renamed. |
+| `aiProvenance` | object[] | no | What a model authored and the operator **accepted** during AI-assisted authoring. At most 10 entries, oldest dropped. Each is `{ model, generatedAt, redaction, instruction, fields }` — bounds below. |
 
 **Lineage sits outside the v4 detection block.** `parentId` and `parentName` are their own SQLite
 columns (`parent_id`, `parent_name` in `api/db.js`), assigned in `toFrontend` *after* the detection
@@ -43,6 +44,29 @@ Fork creation is client-side only: `src/domain/lineage.js`'s `makeFork` deep-clo
 (inheriting its full v4 detection block — severity, ATT&CK mapping, everything) and overrides `id`,
 `created`, `updated`, `usageCount` (0), `favorite` (false), `tags` (a fresh array) and the two
 lineage fields. Nothing is written until the fork is saved like any other query.
+
+### AI provenance
+
+AI provenance is a trail of what the operator accepted, not what the model proposed. Each entry
+is:
+
+| Field | Bounds |
+| --- | --- |
+| `model` | ≤ 100 characters. The configured model, from `/api/ai/health`. |
+| `generatedAt` | ISO 8601, same rules as `created`. |
+| `redaction` | `applied` or `overridden` — `overridden` only if the operator chose to send a disclosure verbatim at least once in the session. |
+| `instruction` | ≤ 1 000 characters, **truncated not rejected** — it is the operator's own words. |
+| `fields` | The names of the query fields the model authored **and the operator accepted**. At most 20 strings. |
+
+`fields` is the field that earns its keep. The audit question a detection library gets asked is not
+"was AI involved" but *"did a model write this detection logic, or only the description?"* — and
+that list answers it precisely. If the model rewrote the KQL and the operator rejected it, `fields`
+must not claim a model authored the detection logic; a trail that lies is worse than none.
+
+**Provenance sits outside the v4 detection block, like lineage.** It is its own SQLite column
+(`ai_provenance`), assigned in `toFrontend` after the metadata spread, so it never appears inside
+`metadata` and never reaches the Sentinel or ATT&CK Navigator exports. It is a fact about how the
+record came to be, not detection metadata about the query.
 
 ## Detection metadata
 

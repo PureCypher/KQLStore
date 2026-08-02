@@ -2,13 +2,11 @@
 // Fork lineage
 //
 // Lineage is stored one generation deep — a query knows its parent and nothing else.
-// Everything below reconstructs the rest client-side, which is free: the SPA already
-// holds the whole store, so there is no reason to denormalise ancestry into the database
-// and then have to keep it correct.
-//
-// Every walk here is bounded. A parent chain can contain a cycle: nothing in the schema
-// prevents it, and an import of two queries that name each other as parent produces one
-// without any single write looking wrong. An unguarded walk hangs the interface.
+// Everything below works with that single generation directly: nothing here walks a
+// parent chain, so there is no multi-generation cycle to guard against. (A prior version
+// of this module had a bounded ancestry walker for that; it had no production caller and
+// was removed rather than kept as unused API surface — see git history if a future task
+// needs multi-generation ancestry again.)
 // ============================================================
 
 /**
@@ -61,26 +59,6 @@ export function childrenOf(queries) {
     else map.set(q.parentId, [q.id]);
   }
   return map;
-}
-
-/**
- * Ancestors nearest-first. Stops at the first unresolvable parent, at a repeat visit
- * (cycle), or at maxDepth — whichever comes first.
- */
-export function ancestryOf(query, byId, maxDepth = 50) {
-  const out = [];
-  const seen = new Set([query.id]);
-  let current = query;
-  while (out.length < maxDepth) {
-    const parentId = current.parentId;
-    if (!parentId || seen.has(parentId)) break;
-    const parent = byId.get(parentId);
-    if (!parent) break;
-    out.push(parent);
-    seen.add(parentId);
-    current = parent;
-  }
-  return out;
 }
 
 /** A fork whose parent is no longer in the store. Never a fork-less query. */

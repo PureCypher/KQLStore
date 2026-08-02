@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeFork, indexById, childrenOf, ancestryOf, isOrphan, matchesLineageFilter } from '../lineage.js';
+import { makeFork, indexById, childrenOf, isOrphan, matchesLineageFilter } from '../lineage.js';
 
 const q = (id, over = {}) => ({
   id, name: `q-${id}`, query: 'SigninLogs | take 1', description: 'd',
@@ -129,56 +129,6 @@ describe('childrenOf', () => {
     const map = childrenOf([q('p1'), q('a', { parentId: 'p1' }), q('b', { parentId: 'p1' }), q('c')]);
     expect(map.get('p1')).toEqual(['a', 'b']);
     expect(map.has('c')).toBe(false);
-  });
-});
-
-describe('ancestryOf', () => {
-  const queries = [q('root'), q('mid', { parentId: 'root' }), q('leaf', { parentId: 'mid' })];
-  const byId = indexById(queries);
-
-  it('returns ancestors nearest-first', () => {
-    expect(ancestryOf(queries[2], byId).map((a) => a.id)).toEqual(['mid', 'root']);
-  });
-
-  it('returns empty for a query with no parent', () => {
-    expect(ancestryOf(queries[0], byId)).toEqual([]);
-  });
-
-  it('stops at a missing ancestor rather than throwing', () => {
-    const orphan = q('o', { parentId: 'gone' });
-    expect(ancestryOf(orphan, indexById([orphan]))).toEqual([]);
-  });
-
-  it('terminates on a cycle instead of hanging', () => {
-    const cyclic = [q('x', { parentId: 'y' }), q('y', { parentId: 'x' })];
-    const map = indexById(cyclic);
-    const walked = ancestryOf(cyclic[0], map);
-    // Walking from x: seen={x}, walk to y, seen={x,y}, try x again, found in seen, stop.
-    // Expected: [y]
-    expect(walked.map((a) => a.id)).toEqual(['y']);
-  });
-
-  it('terminates on self-reference without hanging', () => {
-    const selfRef = q('a', { parentId: 'a' });
-    const map = indexById([selfRef]);
-    const walked = ancestryOf(selfRef, map);
-    // Walking from a: seen={a}, check a.parentId='a', found in seen, stop.
-    // Expected: [] (no ancestors)
-    expect(walked).toEqual([]);
-  });
-
-  it('terminates on a three-node cycle instead of hanging', () => {
-    const cyclic = [q('a', { parentId: 'b' }), q('b', { parentId: 'c' }), q('c', { parentId: 'a' })];
-    const map = indexById(cyclic);
-    const walked = ancestryOf(cyclic[0], map);
-    // Walking from a: seen={a}, walk to b, seen={a,b}, walk to c, seen={a,b,c}, try a, found in seen, stop.
-    // Expected: [b, c]
-    expect(walked.map((a) => a.id)).toEqual(['b', 'c']);
-  });
-
-  it('honours maxDepth on a long chain', () => {
-    const chain = Array.from({ length: 100 }, (_, i) => q(`n${i}`, { parentId: i ? `n${i - 1}` : null }));
-    expect(ancestryOf(chain[99], indexById(chain), 10)).toHaveLength(10);
   });
 });
 

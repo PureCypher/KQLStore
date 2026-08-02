@@ -46,6 +46,14 @@ const LIMITS = {
 
 const IMPORT_MODES = ['insert', 'upsert'];
 
+// UUID v4, format only — deliberately mirrors UUID_REGEX in src/constants.js. api/ cannot
+// import from src/ (they ship and run separately), so this is redefined rather than shared,
+// but the two must agree on what a valid parentId looks like: every id in this store is a
+// UUID v4 (see validateSyncFields / uuidv4() in routes/queries.js), so a parentId the SPA
+// would reject can never resolve to a row here either. Diverging would let a value pass one
+// validator and fail the other on the same payload.
+const PARENT_ID_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function badRequest(message) {
   const err = new Error(message);
   err.statusCode = 400;
@@ -169,15 +177,33 @@ function validateQueryPayload(body, { partial = false } = {}) {
   // Fork lineage. parentId is bounded by LIMITS.id because it holds the same kind of
   // value the id column does; parentName by LIMITS.name because it is a copy of one.
   //
-  // Neither is checked for resolvability. Whether the parent still exists is a question
+  // Resolvability is still not checked here: whether the parent still exists is a question
   // about the store rather than about the payload, and "no" is a legitimate answer — an
-  // import can carry a fork whose parent was never exported, and a fork outlives the
-  // query it came from by design (see the comment on the columns in db.js).
-  const parentId = checkString(body.parentId, 'parentId', LIMITS.id, { required: false });
-  if (parentId !== undefined) out.parentId = parentId;
-
-  const parentName = checkString(body.parentName, 'parentName', LIMITS.name, { required: false });
-  if (parentName !== undefined) out.parentName = parentName;
+  // import can carry a fork whose parent was never exported, and a fork outlives the query
+  // it came from by design (see the comment on the columns in db.js).
+  //
+  // Format IS checked, and it is the same UUID v4 rule src/domain/validate.js applies on
+  // the SPA side. Before this, the two disagreed: the API stored any string up to 200
+  // characters, so a hand-edited or legacy non-UUID parentId could reach the row here even
+  // though the SPA would refuse to keep it past the next save — a fork badge the UI showed
+  // the user would then vanish the moment they did something as innocuous as copying the
+  // query, with no warning. A non-UUID parentId is DROPPED rather than failing the request:
+  // rejecting the payload would turn one hand-edited pointer in a 200-row import into a
+  // 400 for the whole batch, and a pointer that can never resolve to a row in this store
+  // (every id here is a UUID) is exactly as recoverable as no pointer at all — the same
+  // reasoning validateQuery already documents. parentName is dropped with it: the fork
+  // badge only renders when parentId is set, so a surviving name with no id would be dead
+  // weight on every read.
+  const rawParentId = checkString(body.parentId, 'parentId', LIMITS.id, { required: false });
+  const rawParentName = checkString(body.parentName, 'parentName', LIMITS.name, { required: false });
+  if (rawParentId !== undefined && PARENT_ID_UUID_REGEX.test(rawParentId)) {
+    out.parentId = rawParentId;
+    if (rawParentName !== undefined) out.parentName = rawParentName;
+  } else if (rawParentId === undefined && rawParentName !== undefined) {
+    // No parentId in this payload at all (not even an invalid one) — parentName can still
+    // travel on its own, e.g. a partial PUT that only touches the name snapshot.
+    out.parentName = rawParentName;
+  }
 
   const metadata = checkMetadata(collectMetadata(body));
   if (metadata !== undefined) out.metadata = metadata;

@@ -80,17 +80,21 @@ test('paging accepts integers inside the bounds and rejects the rest', () => {
 // Fork lineage.
 //
 // parentId is bounded by LIMITS.id because it holds the same kind of value the id column
-// does, and parentName by LIMITS.name because it is a copy of one. Neither is checked for
-// resolvability here: whether the parent still exists is a question about the store, not
-// about the payload, and the answer is allowed to be "no" (see api/db.js on why there is
-// no foreign key).
+// does, and parentName by LIMITS.name because it is a copy of one. Resolvability is not
+// checked here: whether the parent still exists is a question about the store, not about
+// the payload, and the answer is allowed to be "no" (see api/db.js on why there is no
+// foreign key). Format IS checked — parentId must be a UUID v4, the same rule the SPA's
+// validateQuery applies — and a value that fails it is dropped, not rejected; see the
+// "silently dropped" tests below for that half of the contract.
 // ---------------------------------------------------------------------------
 
-test('accepts parentId and parentName', () => {
+const VALID_PARENT_ID = '11111111-aaaa-4aaa-8aaa-111111111111';
+
+test('accepts a UUID parentId and its parentName', () => {
   const out = validateQueryPayload({
-    name: 'n', query: 'q', parentId: 'abc-123', parentName: 'Entra risky sign-in',
+    name: 'n', query: 'q', parentId: VALID_PARENT_ID, parentName: 'Entra risky sign-in',
   });
-  assert.strictEqual(out.parentId, 'abc-123');
+  assert.strictEqual(out.parentId, VALID_PARENT_ID);
   assert.strictEqual(out.parentName, 'Entra risky sign-in');
 });
 
@@ -126,25 +130,55 @@ test('rejects a non-string parentId', () => {
 });
 
 test('a lineage pointer to a query that does not exist is still a valid payload', () => {
-  // Deliberate: validation says nothing about resolvability. An import carrying a fork
-  // whose parent was never exported must still be storable.
+  // Deliberate: validation says nothing about resolvability, only format. An import
+  // carrying a fork whose parent was never exported must still be storable — the pointer
+  // just has to look like an id, which every id in this store does.
+  const unresolvedButWellFormed = '99999999-bbbb-4bbb-8bbb-999999999999';
   const out = validateQueryPayload({
-    name: 'n', query: 'q', parentId: 'no-such-query', parentName: 'Gone',
+    name: 'n', query: 'q', parentId: unresolvedButWellFormed, parentName: 'Gone',
   });
-  assert.strictEqual(out.parentId, 'no-such-query');
+  assert.strictEqual(out.parentId, unresolvedButWellFormed);
 });
 
 test('lineage survives a partial (PUT) payload', () => {
-  const out = validateQueryPayload({ parentId: 'abc-123' }, { partial: true });
-  assert.strictEqual(out.parentId, 'abc-123');
+  const out = validateQueryPayload({ parentId: VALID_PARENT_ID }, { partial: true });
+  assert.strictEqual(out.parentId, VALID_PARENT_ID);
 });
 
 test('lineage is not folded into the metadata document', () => {
   const out = validateQueryPayload({
-    name: 'n', query: 'q', parentId: 'abc-123', parentName: 'Parent', severity: 'High',
+    name: 'n', query: 'q', parentId: VALID_PARENT_ID, parentName: 'Parent', severity: 'High',
   });
   const metadata = JSON.parse(JSON.stringify(out.metadata));
   assert.ok(!('parentId' in metadata), 'parentId must not enter the v4 metadata blob');
   assert.ok(!('parentName' in metadata), 'parentName must not enter the v4 metadata blob');
   assert.strictEqual(metadata.severity, 'High');
+});
+
+// ---------------------------------------------------------------------------
+// A non-UUID parentId — the format half of the rule. See docs/schema.md and the comment
+// on this block in validate.js for why dropping beats rejecting.
+// ---------------------------------------------------------------------------
+
+test('a non-UUID parentId does not reject the payload — it is dropped, not stored', () => {
+  const out = validateQueryPayload({
+    name: 'n', query: 'q', parentId: 'not-a-uuid', parentName: 'Should vanish with it',
+  });
+  assert.ok(!('parentId' in out), 'a non-UUID pointer must not reach the row');
+  assert.ok(!('parentName' in out), 'the paired name is dropped along with a bad parentId');
+  // The rest of a good payload is unaffected — one bad pointer must not cost the record.
+  assert.strictEqual(out.name, 'n');
+  assert.strictEqual(out.query, 'q');
+});
+
+test('a non-UUID parentId is dropped even with no parentName riding along', () => {
+  const out = validateQueryPayload({ name: 'n', query: 'q', parentId: 'legacy-id-42' });
+  assert.ok(!('parentId' in out));
+});
+
+test('parentName alone (no parentId in the payload at all) is still accepted', () => {
+  // Distinct from the case above: here parentId was never sent, so there is no pointer to
+  // fail format on. A partial PUT touching only the name snapshot must still work.
+  const out = validateQueryPayload({ parentName: 'Stale label' }, { partial: true });
+  assert.strictEqual(out.parentName, 'Stale label');
 });

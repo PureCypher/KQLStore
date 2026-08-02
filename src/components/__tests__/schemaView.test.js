@@ -171,7 +171,7 @@ describe('saving', () => {
     expect(put.body).toEqual({ columns: SIGNIN_LOGS.columns, notes: SIGNIN_LOGS.notes, source: SIGNIN_LOGS.source });
   });
 
-  it('reports the server message on a failed save', async () => {
+  it('reports the server message on a failed save as a durable banner, not a toast', async () => {
     const { addToast } = await mount(routes({
       list: [],
       onPut: () => response({ error: '"columns" exceeds 500 entries' }, { status: 400, statusText: 'Bad Request' }),
@@ -182,7 +182,42 @@ describe('saving', () => {
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Schema' })); });
 
-    expect(addToast).toHaveBeenCalledWith(expect.stringContaining('"columns" exceeds 500 entries'), 'error');
+    expect(screen.getByText(/"columns" exceeds 500 entries/)).toBeTruthy();
+    // A toast would have been the old behaviour; a failed write now gets the persistent
+    // banner instead, the same as a failed query save in App.jsx.
+    expect(addToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the failed-save banner on screen past when a toast would have auto-dismissed', async () => {
+    // Toasts (see App.jsx) clear themselves after 3000ms. A write failure has to outlive
+    // that, or a user who glances away for a few seconds finds no trace anything went
+    // wrong at all.
+    vi.useFakeTimers();
+    try {
+      stubFetch(routes({
+        list: [],
+        onPut: () => response({ error: '"columns" exceeds 500 entries' }, { status: 400, statusText: 'Bad Request' }),
+      }));
+      render(h(ToastContext.Provider, { value: { addToast: vi.fn() } }, h(SchemaViewHost)));
+      // Under fake timers findByText's polling wait never advances (see the paste hint
+      // accessibility test below for the same caveat), so a synchronous query is used
+      // instead — the initial fetchSchemas() promise has already settled by the time
+      // act() returns.
+      await act(async () => {});
+      expect(screen.getByText(/No schemas stored yet/)).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText(/Table name/), { target: { value: 'NewTable' } });
+      fireEvent.change(screen.getByLabelText(/Paste `\| getschema`/), { target: { value: GETSCHEMA_PASTE } });
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Schema' })); });
+      expect(screen.getByText(/"columns" exceeds 500 entries/)).toBeTruthy();
+
+      await act(async () => { vi.advanceTimersByTime(3000); });
+
+      expect(screen.getByText(/"columns" exceeds 500 entries/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -368,6 +403,27 @@ describe('deleting', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(callsTo(calls, '/api/schemas/SigninLogs', 'DELETE')).toHaveLength(0);
     expect(screen.getByText('SigninLogs')).toBeTruthy();
+  });
+
+  it('reports a failed delete as a durable banner, not a toast, and the row survives', async () => {
+    const { calls, addToast } = await mount(routes({
+      list: [SIGNIN_LOGS],
+      onDelete: () => response({ error: 'DB locked' }, { status: 500, statusText: 'Internal Server Error' }),
+    }));
+    await screen.findByText('SigninLogs');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete schema SigninLogs' }));
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    });
+
+    expect(callsTo(calls, '/api/schemas/SigninLogs', 'DELETE')).toHaveLength(1);
+    expect(screen.getByText('SigninLogs')).toBeTruthy();
+    expect(screen.getByText(/DB locked/)).toBeTruthy();
+    expect(addToast).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/DB locked/)).toBeNull();
   });
 });
 

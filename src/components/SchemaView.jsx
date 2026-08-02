@@ -193,6 +193,11 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
   const [schemas, setSchemas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  // Durable surface for a failed WRITE (save/delete/import), mirroring the query-side error
+  // banner in App.jsx rather than a toast: a toast is gone in 3 seconds, and a failed write
+  // leaves nothing else on screen to say the store did not get what the user thinks it got.
+  // loadError above covers the initial fetch; this covers everything after.
+  const [actionError, setActionError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedName, setSelectedName] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -275,6 +280,7 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
 
   const performSave = async () => {
     setSaving(true);
+    setActionError(null);
     const source = pasteText.trim() ? 'getschema' : (selectedSchema ? selectedSchema.source : 'manual');
     try {
       const saved = await StorageAdapter.saveSchema(trimmedName, { columns: columnsForSave, notes: notesInput, source });
@@ -283,7 +289,8 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
       setSelectedName(saved.name);
       setPasteText('');
     } catch (e) {
-      addToast(`Failed to save schema: ${e.message}`, 'error');
+      // Durable, not a toast — see the comment on actionError's declaration.
+      setActionError(`Failed to save schema "${trimmedName}": ${e.message}`);
     }
     setSaving(false);
   };
@@ -314,13 +321,15 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
     const name = deleteTarget;
     if (!name) return;
     setDeleting(true);
+    setActionError(null);
     try {
       await StorageAdapter.deleteSchema(name);
       setSchemas((prev) => prev.filter((s) => s.name !== name));
       if (selectedName === name) resetForm();
       addToast(`Schema "${name}" deleted`, 'info');
     } catch (e) {
-      addToast(`Failed to delete schema: ${e.message}`, 'error');
+      // Durable, not a toast — see the comment on actionError's declaration.
+      setActionError(`Failed to delete schema "${name}": ${e.message}`);
     }
     setDeleting(false);
     setDeleteTarget(null);
@@ -380,6 +389,7 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
   const confirmImport = async () => {
     if (!importPreview) return;
     setImporting(true);
+    setActionError(null);
     const accepted = importPreview.items.filter((i) => i.status === 'add' || i.status === 'update');
     let succeeded = 0;
     let failed = 0;
@@ -397,10 +407,19 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
       }
     }
     if (succeeded > 0) await load();
-    const parts = [`${succeeded} imported`];
-    if (failed) parts.push(`${failed} failed`);
-    if (importPreview.willError) parts.push(`${importPreview.willError} invalid, skipped`);
-    addToast(`Import: ${parts.join(', ')}`, failed || importPreview.willError ? 'error' : 'success');
+    if (failed > 0) {
+      // At least one row failed to write, which means the store now holds less than the
+      // preview promised. That is durable, not a toast — see actionError's declaration.
+      const parts = [`${failed} of ${accepted.length} schemas failed to import`];
+      if (succeeded) parts.push(`${succeeded} succeeded`);
+      setActionError(parts.join(', '));
+    } else {
+      // Nothing failed to write — the invalid rows below were never attempted, and the
+      // preview modal already showed them before the user confirmed, so a toast is enough.
+      const parts = [`${succeeded} imported`];
+      if (importPreview.willError) parts.push(`${importPreview.willError} invalid, skipped`);
+      addToast(`Import: ${parts.join(', ')}`, importPreview.willError ? 'error' : 'success');
+    }
     setImporting(false);
     setImportPreview(null);
   };
@@ -440,6 +459,13 @@ function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInp
         <div className="px-4 py-2 flex items-center justify-between text-xs" style={{ background: '#2a1010', borderBottom: '1px solid #ff444440' }}>
           <span style={{ color: '#ff4444' }}><AlertTriangle size={12} className="inline mr-2" aria-hidden="true" />{loadError}</span>
           <button onClick={load} className="px-2 py-1 rounded text-xs" style={{ color: '#00d4ff', border: '1px solid #2a2a3e' }}>Retry</button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="px-4 py-2 flex items-center justify-between text-xs" style={{ background: '#2a1010', borderBottom: '1px solid #ff444440' }}>
+          <span style={{ color: '#ff4444' }}><AlertTriangle size={12} className="inline mr-2" aria-hidden="true" />{actionError}</span>
+          <button onClick={() => setActionError(null)} className="px-2 py-1 rounded text-xs text-gray-500 hover:text-gray-300">Dismiss</button>
         </div>
       )}
 

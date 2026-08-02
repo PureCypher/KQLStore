@@ -32,6 +32,30 @@ describe('reviewProposal', () => {
     expect(change.valid).toBe(true);
   });
 
+  it('normalizes human-readable tactic names to the kebab-case vocabulary', () => {
+    const [change] = reviewProposal(draft, { attack: { tactics: ['Credential Access', 'Initial Access'] } });
+    expect(change.valid).toBe(true);
+    expect(change.to.tactics).toEqual(['credential-access', 'initial-access']);
+  });
+
+  it('normalizes tactic case without touching already-canonical values', () => {
+    const [change] = reviewProposal(draft, { attack: { tactics: ['credential-access', 'Defense Evasion'] } });
+    expect(change.valid).toBe(true);
+    expect(change.to.tactics).toEqual(['credential-access', 'defense-evasion']);
+  });
+
+  it('still rejects a tactic that is not in the vocabulary under any casing', () => {
+    const [change] = reviewProposal(draft, { attack: { tactics: ['Credential Theft'] } });
+    expect(change.valid).toBe(false);
+    expect(change.reason).toMatch(/tactic/i);
+  });
+
+  it('normalizes lowercase technique ids to the T-prefixed form', () => {
+    const [change] = reviewProposal(draft, { attack: { techniques: ['t1110.003', 'T1110'] } });
+    expect(change.valid).toBe(true);
+    expect(change.to.techniques).toEqual(['T1110.003', 'T1110']);
+  });
+
   it('rejects a severity outside the vocabulary', () => {
     const [change] = reviewProposal(draft, { severity: 'Catastrophic' });
     expect(change.valid).toBe(false);

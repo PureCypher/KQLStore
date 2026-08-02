@@ -13,6 +13,30 @@
 // weakness becomes visible rather than hidden.
 // ============================================================
 import { validateQuery } from './validate.js';
+import { ATTACK_TACTICS } from '../constants.js';
+
+// Models write "Credential Access"; the vocabulary is 'credential-access'. Folding both
+// sides to bare letters maps any spacing/casing of a real tactic onto its canonical form,
+// while a name that is not in the vocabulary ("Credential Theft") passes through untouched
+// and is rejected by the validator with its reason visible — normalization must never
+// widen what validates, only re-spell it.
+const TACTIC_BY_FOLDED = new Map(
+  ATTACK_TACTICS.map((t) => [t.replace(/[^a-z]/gi, '').toLowerCase(), t]),
+);
+
+function normalizeAttack(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const out = { ...value };
+  if (Array.isArray(value.tactics)) {
+    out.tactics = value.tactics.map((t) => (typeof t === 'string'
+      ? TACTIC_BY_FOLDED.get(t.replace(/[^a-z]/gi, '').toLowerCase()) ?? t
+      : t));
+  }
+  if (Array.isArray(value.techniques)) {
+    out.techniques = value.techniques.map((t) => (typeof t === 'string' ? t.trim().toUpperCase() : t));
+  }
+  return out;
+}
 
 // Fields the model may propose. id, usageCount, parentId, created and updated are
 // deliberately absent — they are identity and history, not content, and a model has no
@@ -44,9 +68,10 @@ export function reviewProposal(draft, proposed) {
   const out = [];
   for (const field of PROPOSABLE) {
     if (!(field in proposed)) continue;
-    if (unchanged(draft[field], proposed[field])) continue;
+    const proposedValue = field === 'attack' ? normalizeAttack(proposed[field]) : proposed[field];
+    if (unchanged(draft[field], proposedValue)) continue;
 
-    const candidate = { ...draft, [field]: proposed[field] };
+    const candidate = { ...draft, [field]: proposedValue };
     const { valid, errors, sanitized } = validateQuery(candidate);
 
     // Judge this field alone: a draft that was already invalid elsewhere must not cause
@@ -57,7 +82,7 @@ export function reviewProposal(draft, proposed) {
     out.push({
       field,
       from: draft[field],
-      to: fieldValid && sanitized ? sanitized[field] ?? proposed[field] : proposed[field],
+      to: fieldValid && sanitized ? sanitized[field] ?? proposedValue : proposedValue,
       valid: fieldValid,
       reason: fieldValid ? '' : reasonFor(errors, field),
     });

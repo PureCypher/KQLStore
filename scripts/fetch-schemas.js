@@ -19,20 +19,26 @@ import { SENTINEL_TABLES } from '../src/constants.js';
 // in the same section (e.g. ActionType value lists) are ignored.
 function parseMarkdownColumnRows(section) {
   const columns = [];
-  let inTable = false;
+  // 'seeking': not currently inside a table, looking for the next header row.
+  // 'collecting': inside a confirmed columns table (header cell matched /column/i).
+  // 'skipping': inside a table whose header didn't match — consume its rows
+  // without collecting, then resume seeking once the table ends.
+  let mode = 'seeking';
   for (const line of section.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('|')) {
-      if (inTable) break;
+      if (mode === 'collecting') break; // the real table is done; ignore anything after it
+      mode = 'seeking'; // a skipped (or absent) table ended; keep scanning
       continue;
     }
     const cells = trimmed.split('|').slice(1, -1).map((cell) => cell.trim());
     if (cells.length < 2) continue;
-    if (!inTable) {
-      inTable = true; // header row
+    if (mode === 'seeking') {
+      mode = /column/i.test(cells[0]) ? 'collecting' : 'skipping'; // header row
       continue;
     }
     if (/^:?-{2,}/.test(cells[0])) continue; // |---|---| separator
+    if (mode === 'skipping') continue;
     const name = cells[0].replace(/`/g, '').trim();
     if (!name) continue;
     const type = cells[1].replace(/`/g, '').trim() || 'unknown';
@@ -92,12 +98,19 @@ function parseDefenderTable(rawMarkdown) {
   const nameMatch = markdown.match(/^# (.+)$/m);
   if (!nameMatch) return null;
 
-  const afterH1 = markdown.slice(markdown.indexOf(nameMatch[0]) + nameMatch[0].length);
+  const afterH1 = markdown.slice(nameMatch.index + nameMatch[0].length);
   const columns = parseMarkdownColumnRows(afterH1);
   if (columns.length === 0) return null;
 
+  // Strip a trailing " (Preview)" suffix some Defender H1s carry (e.g.
+  // `# AgentsInfo (Preview)`) — it isn't part of the real KQL table name and
+  // would otherwise break the notes URL and the Defender-wins collision rule
+  // in buildImportRows. Targeted to "(preview)" only: function doc H1s like
+  // `AssignedIPAddresses()` must keep falling through the no-columns path above.
+  const name = nameMatch[1].replace(/`/g, '').trim().replace(/\s*\(preview\)\s*$/i, '').trim();
+
   return {
-    name: nameMatch[1].replace(/`/g, '').trim(),
+    name,
     description: firstProseParagraph(afterH1),
     columns,
   };
@@ -139,7 +152,7 @@ function buildImportRows({ azure, defender, sentinelTableNames, scrapeDate }) {
 
   const warnings = [];
   const rows = [...byName.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map((row) => {
       let { columns, notes } = row;
       if (columns.length > MAX_COLUMNS) {

@@ -117,6 +117,27 @@ describe('parseDefenderTable', () => {
     const md = '# AssignedIPAddresses()\n\nThe function returns addresses. No table here.\n';
     expect(parseDefenderTable(md)).toBeNull();
   });
+
+  test('strips a trailing (Preview) suffix from the H1 name', () => {
+    const md = '# AgentsInfo (Preview)\n\n| Column name | Data type | Description |\n|---|---|---|\n| `DeviceId` | `string` |  |\n';
+    expect(parseDefenderTable(md).name).toBe('AgentsInfo');
+  });
+
+  test('skips a leading non-columns pipe table and finds the real one', () => {
+    const md = [
+      '# T',
+      '',
+      '| Attribute | Value |',
+      '|---|---|',
+      '| Foo | Bar |',
+      '',
+      '| Column name | Data type | Description |',
+      '|-------------|-----------|-------------|',
+      '| `A` | `string` | desc |',
+      '',
+    ].join('\n');
+    expect(parseDefenderTable(md).columns).toEqual([{ name: 'A', type: 'string' }]);
+  });
 });
 
 const col = (name) => ({ name, type: 'string' });

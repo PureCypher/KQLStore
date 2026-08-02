@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseAzureMonitorTable, parseDefenderTable } from '../fetch-schemas.js';
+import { parseAzureMonitorTable, parseDefenderTable, buildImportRows } from '../fetch-schemas.js';
 
 // Modelled on the real generated format of
 // azure-monitor-docs/articles/azure-monitor/reference/tables/signinlogs.md.
@@ -116,5 +116,87 @@ describe('parseDefenderTable', () => {
   test('returns null for a function doc with no columns table', () => {
     const md = '# AssignedIPAddresses()\n\nThe function returns addresses. No table here.\n';
     expect(parseDefenderTable(md)).toBeNull();
+  });
+});
+
+const col = (name) => ({ name, type: 'string' });
+
+describe('buildImportRows', () => {
+  const azureSecurity = { name: 'SecurityEvent', categories: ['Security'], columns: [col('EventID')] };
+  const azureNonSecurity = { name: 'ADTDigitalTwinsOperation', categories: ['Azure Resources'], columns: [col('OperationName')] };
+  const azureKnownNonSecurity = { name: 'Heartbeat', categories: ['Virtual Machines'], columns: [col('Computer')] };
+  const defenderTable = {
+    name: 'DeviceEvents',
+    description: 'Miscellaneous device events.',
+    columns: [col('Timestamp')],
+  };
+  const build = (overrides = {}) =>
+    buildImportRows({
+      azure: [azureSecurity, azureNonSecurity, azureKnownNonSecurity],
+      defender: [defenderTable],
+      sentinelTableNames: ['Heartbeat'],
+      scrapeDate: '2026-08-02',
+      ...overrides,
+    });
+
+  test('keeps Security-category and SENTINEL_TABLES tables, drops the rest', () => {
+    const { rows } = build();
+    expect(rows.map((r) => r.name)).toEqual(['DeviceEvents', 'Heartbeat', 'SecurityEvent']);
+  });
+
+  test('composes Log Analytics notes from categories, docs URL and scrape date', () => {
+    const { rows } = build();
+    expect(rows.find((r) => r.name === 'SecurityEvent').notes).toBe(
+      'Categories: Security\n' +
+        'https://learn.microsoft.com/azure/azure-monitor/reference/tables/securityevent\n' +
+        'Scraped from Microsoft Learn on 2026-08-02.',
+    );
+  });
+
+  test('composes Defender notes from description, docs URL and scrape date', () => {
+    const { rows } = build();
+    expect(rows.find((r) => r.name === 'DeviceEvents').notes).toBe(
+      'Miscellaneous device events.\n' +
+        'https://learn.microsoft.com/defender-xdr/advanced-hunting-deviceevents-table\n' +
+        'Scraped from Microsoft Learn on 2026-08-02.',
+    );
+  });
+
+  test('on a name collision the Defender columns win and the note says so', () => {
+    const sentinelCopy = { name: 'DeviceEvents', categories: ['Security'], columns: [col('TimeGenerated')] };
+    const { rows } = build({ azure: [sentinelCopy] });
+    const row = rows.find((r) => r.name === 'DeviceEvents');
+    expect(row.columns).toEqual([col('Timestamp')]);
+    expect(row.notes).toContain("Sentinel's streamed copy of this table also carries TimeGenerated.");
+  });
+
+  test('no collision line when only the Defender source has the table', () => {
+    const { rows } = build();
+    expect(rows.find((r) => r.name === 'DeviceEvents').notes).not.toContain('streamed copy');
+  });
+
+  test('truncates past 500 columns with a warning and a note line', () => {
+    const wide = {
+      name: 'WideTable',
+      categories: ['Security'],
+      columns: Array.from({ length: 512 }, (_, i) => col(`C${i}`)),
+    };
+    const { rows, warnings } = build({ azure: [wide] });
+    const row = rows.find((r) => r.name === 'WideTable');
+    expect(row.columns).toHaveLength(500);
+    expect(row.notes).toContain('Column list truncated to 500 of 512 columns.');
+    expect(warnings).toEqual(['WideTable: 512 columns, truncated to 500']);
+  });
+
+  test('truncates notes at 5000 characters', () => {
+    const chatty = { name: 'ChattyTable', description: 'x'.repeat(6000), columns: [col('A')] };
+    const { rows } = build({ defender: [defenderTable, chatty] });
+    expect(rows.find((r) => r.name === 'ChattyTable').notes).toHaveLength(5000);
+  });
+
+  test('does not mutate its inputs', () => {
+    const before = JSON.parse(JSON.stringify(azureSecurity));
+    build();
+    expect(azureSecurity).toEqual(before);
   });
 });

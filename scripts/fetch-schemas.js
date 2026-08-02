@@ -96,4 +96,55 @@ function parseDefenderTable(rawMarkdown) {
   };
 }
 
-export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph };
+// Bounds copied from LIMITS in api/validate.js — the import must survive
+// PUT /api/schemas/:name validation unchanged.
+const MAX_COLUMNS = 500;
+const MAX_NOTES = 5000;
+
+// Applies the selection filter (Security category or a known Sentinel table),
+// the Defender-wins collision rule, notes composition and the API bounds.
+// Returns { rows, warnings } — rows sorted by name, warnings for the summary.
+function buildImportRows({ azure, defender, sentinelTableNames, scrapeDate }) {
+  const scrapeLine = `Scraped from Microsoft Learn on ${scrapeDate}.`;
+  const byName = new Map();
+
+  for (const table of azure) {
+    const isSecurity = table.categories.includes('Security');
+    if (!isSecurity && !sentinelTableNames.includes(table.name)) continue;
+    const notes = [
+      table.categories.length ? `Categories: ${table.categories.join(', ')}` : null,
+      `https://learn.microsoft.com/azure/azure-monitor/reference/tables/${table.name.toLowerCase()}`,
+      scrapeLine,
+    ].filter(Boolean).join('\n');
+    byName.set(table.name, { name: table.name, columns: table.columns, notes });
+  }
+
+  for (const table of defender) {
+    const collided = byName.has(table.name);
+    const notes = [
+      table.description || null,
+      `https://learn.microsoft.com/defender-xdr/advanced-hunting-${table.name.toLowerCase()}-table`,
+      scrapeLine,
+      collided ? "Sentinel's streamed copy of this table also carries TimeGenerated." : null,
+    ].filter(Boolean).join('\n');
+    byName.set(table.name, { name: table.name, columns: table.columns, notes });
+  }
+
+  const warnings = [];
+  const rows = [...byName.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((row) => {
+      let { columns, notes } = row;
+      if (columns.length > MAX_COLUMNS) {
+        warnings.push(`${row.name}: ${columns.length} columns, truncated to ${MAX_COLUMNS}`);
+        notes = `${notes}\nColumn list truncated to ${MAX_COLUMNS} of ${columns.length} columns.`;
+        columns = columns.slice(0, MAX_COLUMNS);
+      }
+      if (notes.length > MAX_NOTES) notes = notes.slice(0, MAX_NOTES);
+      return { name: row.name, columns, notes };
+    });
+
+  return { rows, warnings };
+}
+
+export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph, buildImportRows };

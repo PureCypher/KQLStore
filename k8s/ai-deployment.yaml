@@ -50,6 +50,11 @@ spec:
                   name: kqlstore-ai
                   key: OLLAMA_API_KEY
                   optional: true
+            # Pin the dated snapshot rather than the code default's rolling
+            # `deepseek-v4-flash:cloud` tag, so provider-side model updates
+            # don't silently change assistant behaviour under a deployed build.
+            - name: OLLAMA_MODEL
+              value: deepseek-v4-flash:0731-cloud
           resources:
             requests:
               cpu: 25m

@@ -43,13 +43,13 @@ const PROPOSE_TOOL = {
   },
 };
 
-function systemPrompt(schemas) {
+function systemPrompt(schemas, knownTables = []) {
   const rendered = schemas.map((s) => {
     const cols = s.columns.map((c) => `${c.name}:${c.type}`).join(', ');
     return `${s.name}\n  columns: ${cols}${s.notes ? `\n  notes: ${s.notes}` : ''}`;
   }).join('\n\n');
 
-  return [
+  const lines = [
     'You help a detection engineer adapt KQL queries for Microsoft Sentinel and Defender XDR.',
     'Only use columns that appear in the schemas below. If a needed column is absent, say so rather than inventing one.',
     'Values written as <SOMETHING_1> are redacted placeholders. Keep them exactly as they are; never guess what they stood for.',
@@ -57,7 +57,20 @@ function systemPrompt(schemas) {
     '',
     'Available table schemas:',
     rendered || '(none provided)',
-  ].join('\n');
+  ];
+
+  // The client sends full schemas only for tables the conversation names; the rest of
+  // the store arrives as bare names so the model can still point the operator at a
+  // table — whose columns then travel on the next turn once it has been named.
+  if (knownTables.length > 0) {
+    lines.push(
+      '',
+      'Other tables that exist (columns not shown — a table named in the conversation gets its schema on the next message):',
+      knownTables.join(', '),
+    );
+  }
+
+  return lines.join('\n');
 }
 
 module.exports = { OLLAMA_URL, PROPOSE_TOOL, systemPrompt };

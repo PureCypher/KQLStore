@@ -18,6 +18,7 @@ import React, { useState, useRef } from 'react';
 import { X, Send, Terminal } from 'lucide-react';
 import { StorageAdapter } from '../storage/adapter.js';
 import { reviewProposal } from '../domain/proposal.js';
+import { selectRelevantSchemas } from '../domain/relevantSchemas.js';
 import { RedactionPreview } from './RedactionPreview.jsx';
 import { ProposalReview } from './ProposalReview.jsx';
 import { FOCUS_RING } from './a11y.jsx';
@@ -78,9 +79,14 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
     try {
       // The ORIGINAL draft, not the redacted preview: the server redacts and holds the
       // marker mapping so it can restore the proposal on the way back.
+      // Only tables NAMED in the draft or the conversation travel with their columns;
+      // the rest go as bare names the server folds into a known-tables line. See
+      // src/domain/relevantSchemas.js for why.
+      const { relevant, otherNames } = selectRelevantSchemas(schemas, draftFields(), history);
       const res = await StorageAdapter.aiChat({
         messages: history,
-        schemas,
+        schemas: relevant,
+        knownTables: otherNames,
         allowVerbatim: verbatim,
         draft: draftFields(),
       });

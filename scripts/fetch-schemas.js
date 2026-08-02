@@ -61,4 +61,39 @@ function parseAzureMonitorTable(rawMarkdown) {
   return { name: nameMatch[1].trim(), categories, columns };
 }
 
-export { parseAzureMonitorTable, parseMarkdownColumnRows };
+// First real prose paragraph of `text`: skips [!INCLUDE]/[!TIP] directives,
+// blockquotes, headings, tables and blank blocks; flattens [text](url) links
+// to their text and strips backticks, because notes are plain text.
+function firstProseParagraph(text) {
+  for (const block of text.split(/\n\s*\n/)) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+    if (/^(\[!|>|#|\|)/.test(trimmed)) continue;
+    return trimmed
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/`/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  return '';
+}
+
+// One defender-docs advanced-hunting-*-table.md -> { name, description, columns },
+// or null for docs with no columns table (the -function.md pages, mainly).
+function parseDefenderTable(rawMarkdown) {
+  const markdown = stripFrontmatter(rawMarkdown);
+  const nameMatch = markdown.match(/^# (.+)$/m);
+  if (!nameMatch) return null;
+
+  const afterH1 = markdown.slice(markdown.indexOf(nameMatch[0]) + nameMatch[0].length);
+  const columns = parseMarkdownColumnRows(afterH1);
+  if (columns.length === 0) return null;
+
+  return {
+    name: nameMatch[1].replace(/`/g, '').trim(),
+    description: firstProseParagraph(afterH1),
+    columns,
+  };
+}
+
+export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseAzureMonitorTable } from '../fetch-schemas.js';
+import { parseAzureMonitorTable, parseDefenderTable } from '../fetch-schemas.js';
 
 // Modelled on the real generated format of
 // azure-monitor-docs/articles/azure-monitor/reference/tables/signinlogs.md.
@@ -66,5 +66,55 @@ describe('parseAzureMonitorTable', () => {
 
   test('returns null when the Columns section has an empty table', () => {
     expect(parseAzureMonitorTable('# T\n\n## Columns\n\n| Column | Type | Description |\n|---|---|---|\n')).toBeNull();
+  });
+});
+
+// Modelled on the real format of defender-docs/defender-xdr/advanced-hunting-deviceevents-table.md.
+const DEFENDER_FIXTURE = `---
+title: DeviceEvents table in the advanced hunting schema
+ms.topic: reference
+---
+
+# DeviceEvents
+
+[!INCLUDE [Microsoft Defender XDR rebranding](../includes/microsoft-defender.md)]
+
+The miscellaneous device events or \`DeviceEvents\` table in the [advanced hunting](advanced-hunting-overview.md) schema contains information about various event types. Use this reference to construct queries.
+
+> [!TIP]
+> For detailed information, use the built-in schema reference.
+
+| Column name | Data type | Description |
+|-------------|-----------|-------------|
+| \`Timestamp\` | \`datetime\` | Date and time when the event was recorded |
+| \`DeviceId\` | \`string\` | Unique identifier for the device in the service |
+| \`ActionType\` | \`string\` | Type of activity that triggered the event |
+`;
+
+describe('parseDefenderTable', () => {
+  test('parses name, description and backticked columns', () => {
+    const result = parseDefenderTable(DEFENDER_FIXTURE);
+
+    expect(result.name).toBe('DeviceEvents');
+    expect(result.description).toBe(
+      'The miscellaneous device events or DeviceEvents table in the advanced hunting schema contains information about various event types. Use this reference to construct queries.',
+    );
+    expect(result.columns).toEqual([
+      { name: 'Timestamp', type: 'datetime' },
+      { name: 'DeviceId', type: 'string' },
+      { name: 'ActionType', type: 'string' },
+    ]);
+  });
+
+  test('returns an empty description when only directives precede the table', () => {
+    const md = '# T\n\n[!INCLUDE [x](y.md)]\n\n| Column name | Data type | Description |\n|---|---|---|\n| `A` | `string` |  |\n';
+    const result = parseDefenderTable(md);
+    expect(result.description).toBe('');
+    expect(result.columns).toEqual([{ name: 'A', type: 'string' }]);
+  });
+
+  test('returns null for a function doc with no columns table', () => {
+    const md = '# AssignedIPAddresses()\n\nThe function returns addresses. No table here.\n';
+    expect(parseDefenderTable(md)).toBeNull();
   });
 });

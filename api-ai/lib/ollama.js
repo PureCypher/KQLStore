@@ -26,7 +26,10 @@ const PROPOSE_TOOL = {
       type: 'object',
       properties: {
         name: { type: 'string' },
-        description: { type: 'string' },
+        description: {
+          type: 'string',
+          description: 'A prose summary of what the query detects and how, then a blank line, then a line reading exactly "Use Case:" followed by one "- " bullet per use case.',
+        },
         query: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['Informational', 'Low', 'Medium', 'High', 'Critical'] },
@@ -73,6 +76,19 @@ function systemPrompt(schemas, knownTables = []) {
     'Only use columns that appear in the schemas below. If a needed column is absent, say so rather than inventing one.',
     'Values written as <SOMETHING_1> are redacted placeholders. Keep them exactly as they are; never guess what they stood for.',
     'When you change the query or its metadata, call propose_query. Explain your reasoning in the message text.',
+    '',
+    // The library's own convention, counted across the stored descriptions rather than
+    // invented: "Use Case:" then one "- " bullet per case, each a full sentence.
+    'A description follows the library house style: a prose paragraph saying what the query',
+    'detects and how, then a blank line, then a line reading exactly "Use Case:", then one',
+    'bullet per use case, each starting with "- " on its own line and written as a full',
+    'sentence. For example:',
+    '',
+    'Detects failed sign-ins from a single source against many distinct accounts.',
+    '',
+    'Use Case:',
+    '- Detect password spraying against numerous accounts from one source.',
+    '- Identify brute-force attempts against a small number of accounts.',
     '',
     KQL_BEST_PRACTICES,
     '',

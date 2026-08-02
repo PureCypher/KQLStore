@@ -111,6 +111,22 @@ test('the system prompt carries the KQL best-practices block', async () => {
   assert.match(system, /fewest rows on the left/i, 'join-ordering guidance missing');
 });
 
+test('the system prompt states the library house style for a description', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const system = upstream.lastRequest.body.messages[0].content;
+  assert.match(system, /Use Case:/, 'the house-style heading is not named');
+  assert.match(system, /- /, 'the bullet marker is not shown');
+  assert.match(system, /description/i);
+});
+
+test('the propose_query tool describes the description format too', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const tool = upstream.lastRequest.body.tools[0];
+  assert.match(tool.function.parameters.properties.description.description, /Use Case:/);
+});
+
 test('the best-practices block precedes the schemas so schemas stay closest to the task', async () => {
   upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
   await chat(baseBody);

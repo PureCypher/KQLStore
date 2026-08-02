@@ -90,6 +90,19 @@ string comparison instead of mangling it, and typed placeholders survive the mod
 around when it rewrites the surrounding KQL. Un-redaction on the return path is a substitution over
 the model's response.
 
+## House style for a description
+
+A proposed `description` follows the convention the library already uses: a prose paragraph
+saying what the query detects and how, a blank line, a line reading exactly `Use Case:`, then one
+`- ` bullet per use case, each written as a full sentence. The system prompt states the rule and
+shows an example, and the `propose_query` tool schema repeats it on the `description` field — the
+model reads both.
+
+The convention was counted, not invented: of the stored descriptions carrying such a heading,
+`Use Case:` was the clear majority, against a handful of `Use case:`, `Use Cases:` and one
+`User Case:`. Nothing enforces the format — like every other proposed field it is reviewed before
+it reaches the draft, and the validator only bounds the length.
+
 ## Why proposals are reviewed, never applied
 
 Ollama Cloud does not support structured outputs (re-verified 2026-08-02 — the docs still say so,

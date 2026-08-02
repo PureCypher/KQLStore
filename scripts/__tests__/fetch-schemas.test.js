@@ -199,4 +199,17 @@ describe('buildImportRows', () => {
     build();
     expect(azureSecurity).toEqual(before);
   });
+
+  test('keeps the column-truncation notice intact even when notes are near the limit', () => {
+    const wideAndChatty = {
+      name: 'WideAndChatty',
+      description: 'x'.repeat(6000),
+      columns: Array.from({ length: 512 }, (_, i) => col(`C${i}`)),
+    };
+    const { rows } = build({ defender: [wideAndChatty] });
+    const row = rows.find((r) => r.name === 'WideAndChatty');
+    expect(row.columns).toHaveLength(500);
+    expect(row.notes.length).toBeLessThanOrEqual(5000);
+    expect(row.notes).toContain('Column list truncated to 500 of 512 columns.');
+  });
 });

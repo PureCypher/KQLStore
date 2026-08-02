@@ -137,7 +137,14 @@ function buildImportRows({ azure, defender, sentinelTableNames, scrapeDate }) {
       let { columns, notes } = row;
       if (columns.length > MAX_COLUMNS) {
         warnings.push(`${row.name}: ${columns.length} columns, truncated to ${MAX_COLUMNS}`);
-        notes = `${notes}\nColumn list truncated to ${MAX_COLUMNS} of ${columns.length} columns.`;
+        const notice = `Column list truncated to ${MAX_COLUMNS} of ${columns.length} columns.`;
+        const noticeWithNewline = `\n${notice}`;
+        // Reserve space for the notice and ensure it survives the MAX_NOTES truncation
+        if (notes.length + noticeWithNewline.length > MAX_NOTES) {
+          notes = notes.slice(0, MAX_NOTES - noticeWithNewline.length) + noticeWithNewline;
+        } else {
+          notes = notes + noticeWithNewline;
+        }
         columns = columns.slice(0, MAX_COLUMNS);
       }
       if (notes.length > MAX_NOTES) notes = notes.slice(0, MAX_NOTES);

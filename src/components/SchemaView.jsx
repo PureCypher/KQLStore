@@ -4,6 +4,7 @@ import { parseGetSchema } from '../domain/getschema.js';
 import { StorageAdapter } from '../storage/adapter.js';
 import { safeJsonParse } from '../lib/json.js';
 import { useToast } from '../context/toast.js';
+import { useDebounce } from '../hooks/useDebounce.js';
 import { Modal } from './Modal.jsx';
 import { FOCUS_RING } from './a11y.jsx';
 
@@ -27,6 +28,12 @@ import { FOCUS_RING } from './a11y.jsx';
 // for this task to rework. What is reused is the item shape it renders —
 // { index, name, status, reason } — and the same review-before-commit shape, built
 // locally against StorageAdapter.saveSchema instead.
+//
+// nameInput/pasteText/notesInput are owned by App, not this component: SchemaView is
+// unmounted whenever `view !== 'schemas'` (App keeps exactly one tabpanel in the DOM at a
+// time — see App.jsx's comment on that choice), and local state does not survive an
+// unmount. Owning the three form fields one level up means a paste and hand-typed notes
+// are still there when the user comes back from the Queries tab to check something.
 // ---------------------------------------------------------------------------
 
 const SOURCE_LABELS = {
@@ -35,8 +42,27 @@ const SOURCE_LABELS = {
   import: 'import',
 };
 
+// Screen readers get the settled outcome, not a running commentary: parseGetSchema is
+// cheap enough to re-run on every keystroke for the sighted, always-current hint text, but
+// an aria-live region that changes on every keystroke reads out a new value on every
+// keystroke too — a screen-reader user typing a 40-column paste hears it interrupted and
+// re-announced dozens of times. The visible hint stays live; a second, hidden, debounced
+// node is what gets announced, once typing pauses.
+const PASTE_ANNOUNCE_DELAY_MS = 500;
+
 function columnWord(n) {
   return `${n} column${n === 1 ? '' : 's'}`;
+}
+
+/** The paste-box hint text, live for sighted users and (debounced) for screen readers. */
+function describePasteHint(text, parseResult, selectedSchema) {
+  if (text.trim()) {
+    return parseResult.ok ? `${columnWord(parseResult.columns.length)} parsed.` : parseResult.error;
+  }
+  if (selectedSchema) {
+    return `Keeping the stored ${columnWord(selectedSchema.columns.length)}. Paste new getschema output to replace them.`;
+  }
+  return 'Paste getschema output to add columns.';
 }
 
 /** Build the accepted-or-rejected preview for one row of an imported schema file. */
@@ -72,6 +98,35 @@ function DeleteSchemaModal({ name, deleting, onCancel, onConfirm }) {
           className={`px-4 py-2 rounded-lg text-sm font-mono font-bold disabled:opacity-40 ${FOCUS_RING}`}
           style={{ background: '#ff4444', color: '#0a0a0f' }}>
           {deleting ? 'Deleting...' : 'Delete'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function SaveCollisionModal({ name, existing, saving, onCancel, onConfirm }) {
+  const titleId = useId();
+  return (
+    <Modal
+      labelledBy={titleId}
+      onClose={onCancel}
+      backdropClassName="z-[80] items-center justify-center"
+      className="rounded-xl p-6 font-mono w-full max-w-sm mx-4"
+      style={{ background: '#12121a', border: '1px solid #2a2a3e' }}
+    >
+      <h2 id={titleId} className="text-lg font-bold mb-3" style={{ color: '#ffb020' }}>Overwrite existing schema?</h2>
+      <p className="text-sm text-gray-300 mb-5">
+        A schema named <span style={{ color: '#00d4ff' }}>{name}</span> already exists, with {columnWord(existing.columns.length)}
+        {existing.notes ? ' and notes' : ''}. Saving replaces its columns{existing.notes ? ' and clears its notes' : ''} — this cannot be undone.
+      </p>
+      <div className="flex justify-end gap-3">
+        <button onClick={onCancel}
+          className={`px-4 py-2 rounded-lg text-sm font-mono text-gray-400 hover:text-gray-200 hover:bg-white/5 ${FOCUS_RING}`}
+          style={{ border: '1px solid #2a2a3e' }}>Cancel</button>
+        <button onClick={onConfirm} disabled={saving}
+          className={`px-4 py-2 rounded-lg text-sm font-mono font-bold disabled:opacity-40 ${FOCUS_RING}`}
+          style={{ background: '#ffb020', color: '#0a0a0f' }}>
+          {saving ? 'Saving...' : 'Overwrite'}
         </button>
       </div>
     </Modal>
@@ -133,19 +188,17 @@ function SchemaImportModal({ preview, importing, onCancel, onConfirm }) {
   );
 }
 
-function SchemaView() {
+function SchemaView({ nameInput, setNameInput, pasteText, setPasteText, notesInput, setNotesInput }) {
   const { addToast } = useToast();
   const [schemas, setSchemas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedName, setSelectedName] = useState(null);
-  const [nameInput, setNameInput] = useState('');
-  const [pasteText, setPasteText] = useState('');
-  const [notesInput, setNotesInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [collisionTarget, setCollisionTarget] = useState(null);
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
@@ -177,6 +230,11 @@ function SchemaView() {
   );
 
   const parseResult = useMemo(() => (pasteText.trim() ? parseGetSchema(pasteText) : null), [pasteText]);
+  const debouncedPasteText = useDebounce(pasteText, PASTE_ANNOUNCE_DELAY_MS);
+  const debouncedParseResult = useMemo(
+    () => (debouncedPasteText.trim() ? parseGetSchema(debouncedPasteText) : null),
+    [debouncedPasteText],
+  );
   const columnsForSave = pasteText.trim()
     ? (parseResult.ok ? parseResult.columns : null)
     : (selectedSchema ? selectedSchema.columns : null);
@@ -215,8 +273,7 @@ function SchemaView() {
     });
   };
 
-  const handleSave = async () => {
-    if (!canSave) return;
+  const performSave = async () => {
     setSaving(true);
     const source = pasteText.trim() ? 'getschema' : (selectedSchema ? selectedSchema.source : 'manual');
     try {
@@ -229,6 +286,28 @@ function SchemaView() {
       addToast(`Failed to save schema: ${e.message}`, 'error');
     }
     setSaving(false);
+  };
+
+  // A save under a typed name that already exists in the loaded list is the only
+  // destructive action in this component with no guard: PUT is an upsert, so it replaces
+  // the stored columns and — if Notes was left empty — blanks the notes too, with no way
+  // back. Delete already confirms, and the JSON import preview already labels this same
+  // collision "Overwrites the stored schema"; this makes the direct-save path consistent
+  // with both instead of the only silent one. Editing via the list (selectedSchema truthy)
+  // is exempt — selecting an existing row and clicking Update IS the edit, not a collision.
+  const handleSave = () => {
+    if (!canSave) return;
+    const collision = !selectedSchema ? schemas.find((s) => s.name === trimmedName) : null;
+    if (collision) {
+      setCollisionTarget(collision);
+      return;
+    }
+    performSave();
+  };
+
+  const handleCollisionConfirm = async () => {
+    await performSave();
+    setCollisionTarget(null);
   };
 
   const handleDeleteConfirm = async () => {
@@ -330,16 +409,8 @@ function SchemaView() {
   const inputSty = { background: '#1a1a2e', border: '1px solid #2a2a3e' };
   const labelCls = 'text-xs text-gray-400 mb-1 block';
 
-  let pasteHint = null;
-  if (pasteText.trim()) {
-    pasteHint = parseResult.ok
-      ? `${columnWord(parseResult.columns.length)} parsed.`
-      : parseResult.error;
-  } else if (selectedSchema) {
-    pasteHint = `Keeping the stored ${columnWord(selectedSchema.columns.length)}. Paste new getschema output to replace them.`;
-  } else {
-    pasteHint = 'Paste getschema output to add columns.';
-  }
+  const pasteHint = describePasteHint(pasteText, parseResult, selectedSchema);
+  const announcedPasteHint = describePasteHint(debouncedPasteText, debouncedParseResult, selectedSchema);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -416,8 +487,13 @@ function SchemaView() {
                 aria-describedby={ids.pasteHint} spellCheck={false}
                 value={pasteText} onChange={(e) => setPasteText(e.target.value)}
                 placeholder={'ColumnName    ColumnType\nTimeGenerated  datetime\nAccount        string'} />
-              <p id={ids.pasteHint} role="status" aria-live="polite" className="text-xs mt-1"
+              <p id={ids.pasteHint} className="text-xs mt-1"
                 style={{ color: pasteText.trim() && !parseResult.ok ? '#ff6b6b' : '#8b8fa3' }}>{pasteHint}</p>
+              {/* Screen-reader-only and debounced: see PASTE_ANNOUNCE_DELAY_MS above. The
+                  visible paragraph above updates every keystroke for sighted users; this one
+                  only changes once typing has paused, so aria-live="polite" announces the
+                  settled outcome instead of narrating every character typed. */}
+              <p role="status" aria-live="polite" className="sr-only">{announcedPasteHint}</p>
             </div>
             <div>
               <label className={labelCls} htmlFor={ids.notes}>Notes</label>
@@ -442,6 +518,10 @@ function SchemaView() {
 
       {deleteTarget && (
         <DeleteSchemaModal name={deleteTarget} deleting={deleting} onCancel={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} />
+      )}
+      {collisionTarget && (
+        <SaveCollisionModal name={trimmedName} existing={collisionTarget} saving={saving}
+          onCancel={() => setCollisionTarget(null)} onConfirm={handleCollisionConfirm} />
       )}
       {importPreview && (
         <SchemaImportModal preview={importPreview} importing={importing} onCancel={() => setImportPreview(null)} onConfirm={confirmImport} />

@@ -41,6 +41,14 @@ export default function App() {
   // No router: the app has exactly two top-level views, switched by hand. A router
   // pulls in URL handling this deployment does not use and was never asked to change.
   const [view, setView] = useState('queries');
+  // Owned here, not inside SchemaView: only one tabpanel is ever mounted at a time (see
+  // the `view === 'schemas'` block below), so state that lived inside SchemaView was
+  // destroyed every time the user switched to the Queries tab and back — a pasted
+  // getschema dump and hand-typed notes vanished on an incidental tab check. Lifting the
+  // three form fields here means SchemaView unmounting no longer means losing them.
+  const [schemaNameInput, setSchemaNameInput] = useState('');
+  const [schemaPasteText, setSchemaPasteText] = useState('');
+  const [schemaNotesInput, setSchemaNotesInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebounce(searchTerm, 250);
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -319,14 +327,25 @@ export default function App() {
         e.preventDefault();
         setShowKeyboardHelp((p) => !p);
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        searchRef.current?.focus();
+
+      // Ctrl/Cmd+K (focus search) and Ctrl/Cmd+N (new query) both act on things that only
+      // exist on the Queries tab: searchRef is the search box rendered by SidebarContent,
+      // which is unmounted while view !== 'queries', so +K silently focused nothing; +N
+      // opened the query editor on top of whatever the Schemas tab was showing, including
+      // over an in-progress schema paste. Scoping both to the Queries tab fixes both —
+      // this handler was written before the Schemas tab existed and never learned about
+      // `view`, which is also why `view` is now in the dependency array below.
+      if (view === 'queries') {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          searchRef.current?.focus();
+        }
+        if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !inInput) {
+          e.preventDefault();
+          setEditingQuery({});
+        }
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !inInput) {
-        e.preventDefault();
-        setEditingQuery({});
-      }
+
       if (e.key === 'Escape') {
         if (importPreview) setImportPreview(null);
         else if (showInspector) setShowInspector(false);
@@ -338,7 +357,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [editingQuery, showKeyboardHelp, searchTerm, showMobileSidebar, showInspector, importPreview]);
+  }, [editingQuery, showKeyboardHelp, searchTerm, showMobileSidebar, showInspector, importPreview, view]);
 
   // --- Filtering & Sorting ---
   const allTags = useMemo(() => {
@@ -644,7 +663,11 @@ export default function App() {
 
           {view === 'schemas' && (
             <div role="tabpanel" id={tabIds.schemasPanel} aria-labelledby={tabIds.schemasTab} className="flex-1 flex flex-col min-w-0 overflow-hidden">
-              <SchemaView />
+              <SchemaView
+                nameInput={schemaNameInput} setNameInput={setSchemaNameInput}
+                pasteText={schemaPasteText} setPasteText={setSchemaPasteText}
+                notesInput={schemaNotesInput} setNotesInput={setSchemaNotesInput}
+              />
             </div>
           )}
 

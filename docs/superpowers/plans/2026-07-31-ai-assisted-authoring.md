@@ -18,9 +18,33 @@
 - **`k8s/api-networkpolicy.yaml` must keep `egress: []` on `kqlstore-api`.** If any task appears to need egress there, the task is wrong.
 - **`nginx.conf` must keep `connect-src 'self'`** in its Content-Security-Policy. The browser never talks to a third-party origin.
 - The AI service never imports `api/db.js` and never mounts the PVC. It receives text and returns text.
-- **Ollama Cloud does not support structured outputs** (verified 2026-07-31). Do not pass a `format` JSON schema and expect it to be honoured. Structured data comes back via tool calling and is then validated.
+- **Ollama Cloud does not support structured outputs** (verified 2026-07-31, re-verified 2026-08-02). Do not pass a `format` JSON schema and expect it to be honoured. Structured data comes back via tool calling and is then validated.
 - The model is `deepseek-v4-flash:cloud`, 1M context, capabilities `tools thinking cloud`.
 - `OLLAMA_API_KEY` comes from a Secret and is read from `process.env` at request time. It must never appear in a response body, a log line, or an error message.
+
+### Provider facts (re-verified 2026-08-02)
+
+Re-checked against current docs before executing. All four claims in the original plan hold;
+the fourth was a gap and is now filled.
+
+| Claim | Verified 2026-08-02 | Source |
+| --- | --- | --- |
+| Cloud does not support structured outputs | **Holds.** Docs still say "Ollama's Cloud currently does not support structured outputs." GitHub issues #12362 (schema ignored), #13967 (oneOf/anyOf schemas get 400 even for tools), ollama-js #264 remain open. The validation gate stays load-bearing. | docs.ollama.com/capabilities/structured-outputs |
+| Capabilities `tools thinking cloud` | **Holds.** Model page lists exactly those three tags; three reasoning modes (none / thinking / max thinking). | ollama.com/library/deepseek-v4-flash |
+| 1M-token context | **Holds.** 1,048,576 tokens. Schema selection is an optimisation, not a requirement. | ollama.com/library/deepseek-v4-flash |
+| Pricing / rate limits / retention | **Previously unrecorded; now filled.** Usage is billed by GPU time (not tokens) against usage-level tiers; limits reset on 5-hour session and 7-day weekly clocks; concurrency Free=1, Pro=3, Max=10, overflow queues then rejects (429). Free tier is for light usage — deepseek-v4-flash:cloud is a real consumer, budget it. Retention is a policy promise, not an architectural one: "never logged or trained on", "processed transiently", NVIDIA zero-retention contracts. That is exactly why redaction-on-by-default is load-bearing rather than a nicety. | ollama.com/pricing |
+
+Caveats that shaped the design but are not part of the four claims:
+
+- Tool-call schemas using `oneOf`/`anyOf` return 400 on Cloud (#13967). The `propose_query`
+  tool in `api-ai/lib/ollama.js` uses only plain JSON Schema (no `oneOf`/`anyOf`), which is
+  what keeps it callable.
+- GitHub issue #14279 reports some third-party-hosted Cloud models may route to providers
+  that retain prompts. The redaction default and the `kqlstore-ai` isolation (no PVC, no
+  database) are the controls that make this tolerable for detection logic.
+- A 429 (rate limit) is a real response from the Cloud API. The chat route treats any
+  non-2xx as `{type:'error', value:'The model service failed.'}` without echoing the body,
+  which covers it.
 - Coverage thresholds apply to `src/domain/**` and `src/lib/**`: lines 80, functions 80, branches 75.
 - Commit after every task. Conventional commit format.
 

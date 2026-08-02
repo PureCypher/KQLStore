@@ -100,6 +100,27 @@ test('includes the supplied schemas in the prompt', async () => {
   assert.ok(JSON.stringify(upstream.lastRequest.body).includes('OktaLogs'));
 });
 
+test('the system prompt carries the KQL best-practices block', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const system = upstream.lastRequest.body.messages[0].content;
+  assert.match(system, /KQL best practices/);
+  assert.match(system, /`has`.*over.*`contains`/, 'string-operator guidance missing');
+  assert.match(system, /datetime.*predicates first|datetime-column predicates first/i, 'filter-ordering guidance missing');
+  assert.match(system, /CreatedDateTime/, 'semantic event-time example missing');
+  assert.match(system, /fewest rows on the left/i, 'join-ordering guidance missing');
+});
+
+test('the best-practices block precedes the schemas so schemas stay closest to the task', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const system = upstream.lastRequest.body.messages[0].content;
+  const practices = system.indexOf('KQL best practices');
+  const schemasAt = system.indexOf('Available table schemas:');
+  assert.ok(practices >= 0 && schemasAt >= 0, 'both sections must exist');
+  assert.ok(practices < schemasAt);
+});
+
 test('renders knownTables as a names-only line in the system prompt', async () => {
   upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
   await chat({ ...baseBody, knownTables: ['DeviceEvents', 'ZTSGraph'] });

@@ -43,6 +43,25 @@ const PROPOSE_TOOL = {
   },
 };
 
+// Distilled from learn.microsoft.com/kusto/query/best-practices (2025-06-09 revision).
+// Kept compact on purpose: this rides every conversation turn. The event-time guidance
+// splits the operator's concern in two — the RANGE filter stays on the indexed ingestion
+// timestamp (that is Microsoft's first rule: datetime predicates use the shard index),
+// while the ANALYSIS uses the semantically correct column when the table has one.
+const KQL_BEST_PRACTICES = [
+  'KQL best practices — apply them to every query you write or rewrite:',
+  '- Filter early: `where` immediately after the table reference; datetime-column predicates first (they use the shard index), then term-level string/dynamic predicates ordered by selectivity, then numeric predicates, then unindexed scans last.',
+  "- Time semantics: filter the time RANGE on the table's indexed timestamp (TimeGenerated in Sentinel tables, Timestamp in Defender XDR tables). When the table carries a more meaningful event-time column, use THAT column for the analysis — projection, bin(), sorting, correlation. Example: SigninLogs' CreatedDateTime is the sign-in initiation time; prefer it over TimeGenerated in output and logic.",
+  '- Strings: prefer `has`/`has_cs` over `contains`; prefer case-sensitive `==`, `in`, `contains_cs` over `=~`, `in~`. For case-insensitive matching use `Col =~ "value"`, never `tolower(Col) == "value"`. Search specific columns; never `search *`.',
+  '- Dynamic columns: when looking for a rare value, pre-filter with `where DynamicCol has "value"` before `where DynamicCol.key == "value"`, so JSON parsing runs only on the survivors.',
+  '- Filter on table columns, not calculated ones: `T | where predicate(Expr)`, not `T | extend v = Expr | where predicate(v)`.',
+  '- Project only the columns the query needs, as early as the logic allows.',
+  '- Joins: put the table with the fewest rows on the left; use `in` instead of a left-semi join to filter on one column; use `lookup` when the right side is a small dimension table; `hint.strategy=broadcast` when the left side is under ~100MB; `hint.shufflekey=<key>` when both sides are large or a summarize groups by keys with millions of distinct values.',
+  '- Reuse: wrap a subquery referenced more than once in `let` + `materialize()`, pushing filters and projections inside the materialized expression.',
+  '- Parsing: one `parse` statement for strings sharing a format instead of several `extract()` calls; `extract()` only for irregular patterns.',
+  '- Exploration: while a query is untested, end it with `| take <n>` or a `count` so it stays bounded.',
+].join('\n');
+
 function systemPrompt(schemas, knownTables = []) {
   const rendered = schemas.map((s) => {
     const cols = s.columns.map((c) => `${c.name}:${c.type}`).join(', ');
@@ -54,6 +73,8 @@ function systemPrompt(schemas, knownTables = []) {
     'Only use columns that appear in the schemas below. If a needed column is absent, say so rather than inventing one.',
     'Values written as <SOMETHING_1> are redacted placeholders. Keep them exactly as they are; never guess what they stood for.',
     'When you change the query or its metadata, call propose_query. Explain your reasoning in the message text.',
+    '',
+    KQL_BEST_PRACTICES,
     '',
     'Available table schemas:',
     rendered || '(none provided)',

@@ -174,4 +174,4 @@ function useSchemaImportExport({ schemas, load, addToast, setActionError }) {
   return { importPreview, importing, fileInputRef, handleExport, handleImportFile, confirmImport, dismissImport };
 }
 
-export { useSchemaImportExport, SchemaImportModal, planImportRow };
+export { useSchemaImportExport, SchemaImportModal };

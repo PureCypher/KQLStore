@@ -91,7 +91,20 @@ parses every Log Analytics table categorised **Security** (plus everything in
 `SENTINEL_TABLES`) and every Defender XDR Advanced Hunting table, and writes the bare
 `{name, columns, notes}` array the **Import** button above accepts — so the importer's
 new-vs-overwrite preview stays the review gate, and re-running it later picks up Microsoft's
-schema changes. Where a table exists in both sources (the `Device*`, `Email*`, `Identity*`
+schema changes.
+
+Because an import **replaces** a row's notes wholesale, a refresh would silently erase any
+notes written by hand — column preferences, retention caveats, DCR history. Before
+re-importing, hand the scraper the current store and it carries those lines forward:
+
+```console
+$ node scripts/fetch-schemas.js --existing kql-store-schemas-2026-08-02.json
+```
+
+`--existing` accepts the **Export** file from the tab above or a bare `curl /api/schemas`
+dump. The scraper regenerates its own reference lines (categories, docs URL, scrape date)
+and re-appends every line it did not write itself, keeping notes under the 5 000-character
+bound with the curated tail — not the fresh reference lines — taking any cut. Where a table exists in both sources (the `Device*`, `Email*`, `Identity*`
 families), the Defender XDR shape wins and the notes say so. Design:
 [the scraper spec](superpowers/specs/2026-08-02-table-schema-scraper-design.md).
 

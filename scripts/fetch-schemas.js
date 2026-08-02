@@ -3,7 +3,12 @@
 // the Schemas tab importer accepts. Sources are the generated markdown behind
 // learn.microsoft.com; see docs/superpowers/specs/2026-08-02-table-schema-scraper-design.md.
 //
-//   node scripts/fetch-schemas.js [output-path]     # default ./table-schemas.json
+//   node scripts/fetch-schemas.js [output-path]                      # default ./table-schemas.json
+//   node scripts/fetch-schemas.js --existing <store-dump.json>       # carry curated note lines forward
+//
+// --existing takes the current store (the Schemas tab's Export file, or a
+// `curl /api/schemas` dump) and re-appends any note lines the scraper did not
+// generate itself, so hand-written notes survive a refresh + re-import.
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from 'node:child_process';
@@ -209,8 +214,64 @@ function parseDirectory(dir, filePattern, parse) {
   return { parsed, skipped };
 }
 
+// The scraper's own note lines, recognizable so a re-run can regenerate them while
+// carrying every OTHER line forward — the importer replaces notes wholesale, so
+// hand-curated lines (column preferences, retention caveats) would otherwise be lost
+// on every refresh.
+const GENERATED_LINE_PATTERNS = [
+  /^Categories: /,
+  /^https:\/\/learn\.microsoft\.com\//,
+  /^Scraped from Microsoft Learn on \d{4}-\d{2}-\d{2}\.$/,
+  /^Sentinel's streamed copy of this table also carries TimeGenerated\.$/,
+  /^Column list truncated to \d+ of \d+ columns\.$/,
+];
+
+function curatedNoteLines(notes) {
+  if (typeof notes !== 'string' || !notes) return [];
+  return notes.split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !GENERATED_LINE_PATTERNS.some((p) => p.test(line)));
+}
+
+// Carries curated note lines from an existing store dump onto the regenerated rows.
+// Rows without curated history are returned as-is (same reference), and the merged
+// notes are re-capped at MAX_NOTES — generated lines first, so an oversized curated
+// tail is what gets cut, never the fresh reference lines.
+function mergeExistingNotes(rows, existingRows) {
+  const byName = new Map(
+    (Array.isArray(existingRows) ? existingRows : [])
+      .filter((r) => r && typeof r.name === 'string')
+      .map((r) => [r.name, r]),
+  );
+  return rows.map((row) => {
+    const existing = byName.get(row.name);
+    if (!existing) return row;
+    const curated = curatedNoteLines(existing.notes).filter((line) => !row.notes.includes(line));
+    if (curated.length === 0) return row;
+    let notes = `${row.notes}\n${curated.join('\n')}`;
+    if (notes.length > MAX_NOTES) notes = notes.slice(0, MAX_NOTES);
+    return { ...row, notes };
+  });
+}
+
+// Accepts both shapes an operator has at hand: the Schemas tab's Export file
+// ({ schemas: [...] }) and a bare `curl /api/schemas` array.
+function readExistingRows(path) {
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  const rows = Array.isArray(parsed) ? parsed : parsed?.schemas;
+  if (!Array.isArray(rows)) throw new Error(`${path}: expected a JSON array or { "schemas": [...] }`);
+  return rows;
+}
+
 function main() {
-  const outPath = process.argv[2] ?? './table-schemas.json';
+  const args = process.argv.slice(2);
+  const existingFlag = args.indexOf('--existing');
+  const existingPath = existingFlag >= 0 ? args[existingFlag + 1] : null;
+  if (existingFlag >= 0 && !existingPath) throw new Error('--existing requires a path to a schemas JSON file');
+  const positional = args.filter((a, i) => a !== '--existing' && i !== existingFlag + 1);
+  const outPath = positional[0] ?? './table-schemas.json';
+  // Read (and validate) the existing dump BEFORE the expensive clones.
+  const existingRows = existingPath ? readExistingRows(existingPath) : null;
   const scrapeDate = new Date().toISOString().slice(0, 10);
   const cloneRoots = [];
   try {
@@ -226,18 +287,24 @@ function main() {
       parseDefenderTable,
     );
 
-    const { rows, warnings } = buildImportRows({
+    const built = buildImportRows({
       azure: azure.parsed,
       defender: defender.parsed,
       sentinelTableNames: SENTINEL_TABLES,
       scrapeDate,
     });
+    const rows = existingRows ? mergeExistingNotes(built.rows, existingRows) : built.rows;
+    const { warnings } = built;
 
     writeFileSync(outPath, `${JSON.stringify(rows, null, 2)}\n`);
 
     for (const warning of warnings) console.warn(`warning: ${warning}`);
     const skipped = [...azure.skipped.map((f) => `azure:${f}`), ...defender.skipped.map((f) => `defender:${f}`)];
     console.log(`${rows.length} tables written to ${outPath} (${azure.parsed.length} Log Analytics docs parsed, ${defender.parsed.length} Defender).`);
+    if (existingRows) {
+      const carried = rows.filter((r, i) => r !== built.rows[i]).length;
+      console.log(`${carried} tables carried curated notes forward from ${existingPath}.`);
+    }
     if (skipped.length) console.log(`${skipped.length} files skipped (no parseable schema): ${skipped.join(', ')}`);
   } finally {
     for (const root of cloneRoots) rmSync(root, { recursive: true, force: true });
@@ -246,4 +313,4 @@ function main() {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
 
-export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph, buildImportRows };
+export { parseAzureMonitorTable, parseMarkdownColumnRows, parseDefenderTable, firstProseParagraph, buildImportRows, mergeExistingNotes };

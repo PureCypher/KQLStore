@@ -1805,14 +1805,14 @@ git commit -m "docs: document AI-assisted authoring, its data flow and its trade
 
 ## Definition of done
 
-- [ ] `cd api && node --test "test/**/*.test.js"` passes
-- [ ] `cd api-ai && node --test "test/**/*.test.js"` passes
-- [ ] `npm run test:coverage`, `npm run lint`, `npm run build` all pass
-- [ ] `grep -c "connect-src 'self'" nginx.conf` returns 1
-- [ ] `kqlstore-api`'s NetworkPolicy still reads `egress: []`
-- [ ] The NetworkPolicy allow and deny paths were verified with the pods on **different nodes**
-- [ ] A query containing an AWS key is refused, and the key does not appear in the response
-- [ ] A query containing a watchlist name reaches the model as a typed marker, and the marker is restored in the proposal
-- [ ] An invalid ATT&CK technique arrives pre-rejected with a readable reason
-- [ ] Scaling `kqlstore-ai` to 0 leaves forking and manual editing fully working, with no assist toggle
-- [ ] Provenance on a saved query lists only the fields the operator accepted
+- [x] `cd api && node --test "test/**/*.test.js"` passes (114)
+- [x] `cd api-ai && node --test "test/**/*.test.js"` passes (20)
+- [x] `npm run test:coverage`, `npm run lint`, `npm run build` all pass (529, coverage 94.6%)
+- [x] `grep -c "connect-src 'self'" nginx.conf` returns 1
+- [x] `kqlstore-api`'s NetworkPolicy still reads `egress: []`
+- [ ] The NetworkPolicy allow and deny paths were verified with the pods on **different nodes** — NOT VERIFIED: no cluster access (kubeconfig is an empty stub). Manifests written and validated by CI; the cross-node probe is documented as a re-test procedure in docs/maintenance/ai-service.md and must be run before the UI depends on the AI path.
+- [x] A query containing an AWS key is refused, and the key does not appear in the response (redact-route and chat suites)
+- [x] A query containing a watchlist name reaches the model as a typed marker, and the marker is restored in the proposal (chat suite)
+- [x] An invalid ATT&CK technique arrives pre-rejected with a readable reason (proposal suite)
+- [ ] Scaling `kqlstore-ai` to 0 leaves forking and manual editing fully working, with no assist toggle — the toggle-visibility half is verified at the component boundary (editorState suite); the live-cluster check could not be run (no cluster access).
+- [x] Provenance on a saved query lists only the fields the operator accepted (buildProvenanceRecord suite + API provenance suite)

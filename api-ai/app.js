@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 const express = require('express');
 const redactRouter = require('./routes/redact');
+const chatRouter = require('./routes/chat');
 
 const app = express();
 app.disable('x-powered-by');
@@ -32,6 +33,7 @@ app.get('/api/ai/health', (_req, res) => {
 });
 
 app.use('/api/ai/redact', redactRouter);
+app.use('/api/ai/chat', chatRouter);
 
 // Errors are reported without their stack and without any upstream body: an Ollama
 // error response can echo the request, and the request contains query text. The

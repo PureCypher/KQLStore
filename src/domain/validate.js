@@ -284,6 +284,27 @@ function validateQuery(query) {
     ? query.parentName.trim().slice(0, 200)
     : '';
 
+  // AI provenance: what a model authored and the operator accepted. Bounded the same
+  // way the API bounds it (see validateProvenance in api/validate.js), so a round-trip
+  // through this validator cannot balloon the column. Malformed entries are dropped,
+  // and the list keeps only the 10 most recent — an absent value is simply [].
+  if (Array.isArray(query.aiProvenance)) {
+    sanitized.aiProvenance = query.aiProvenance
+      .filter((e) => e && typeof e === 'object' && !Array.isArray(e))
+      .map((e) => ({
+        model: typeof e.model === 'string' ? e.model.slice(0, 100) : '',
+        generatedAt: typeof e.generatedAt === 'string' ? e.generatedAt.slice(0, 64) : '',
+        redaction: e.redaction === 'overridden' ? 'overridden' : 'applied',
+        instruction: typeof e.instruction === 'string' ? e.instruction.slice(0, 1000) : '',
+        fields: Array.isArray(e.fields)
+          ? e.fields.filter((f) => typeof f === 'string').slice(0, 20)
+          : [],
+      }))
+      .slice(-10);
+  } else {
+    sanitized.aiProvenance = [];
+  }
+
   // Preserve timestamps
   sanitized.created = typeof query.created === 'string' ? query.created : new Date().toISOString();
   sanitized.updated = typeof query.updated === 'string' ? query.updated : new Date().toISOString();

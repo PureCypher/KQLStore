@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reviewProposal } from '../proposal.js';
+import { reviewProposal, buildProvenanceRecord } from '../proposal.js';
 
 const draft = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -71,5 +71,39 @@ describe('reviewProposal', () => {
   it('returns empty for a null or non-object proposal', () => {
     expect(reviewProposal(draft, null)).toEqual([]);
     expect(reviewProposal(draft, 'nope')).toEqual([]);
+  });
+});
+
+describe('buildProvenanceRecord', () => {
+  const ctx = {
+    model: 'deepseek-v4-flash:cloud',
+    generatedAt: '2026-07-31T14:02:11Z',
+    redaction: 'applied',
+    instruction: 'make this detect Okta instead of Entra',
+  };
+
+  it('records only accepted fields', () => {
+    const accepted = [{ field: 'name', from: 'a', to: 'b', valid: true, reason: '' }];
+    expect(buildProvenanceRecord(accepted, ctx).fields).toEqual(['name']);
+  });
+
+  it('does not record a proposed field that was rejected', () => {
+    // The model proposed name AND query; the operator accepted only name.
+    const accepted = [{ field: 'name', from: 'a', to: 'b', valid: true, reason: '' }];
+    const record = buildProvenanceRecord(accepted, ctx);
+    expect(record.fields).not.toContain('query');
+  });
+
+  it('records an empty fields array when nothing was accepted', () => {
+    expect(buildProvenanceRecord([], ctx).fields).toEqual([]);
+  });
+
+  it('carries the redaction state through', () => {
+    expect(buildProvenanceRecord([], { ...ctx, redaction: 'overridden' }).redaction).toBe('overridden');
+  });
+
+  it('truncates an over-long instruction', () => {
+    const record = buildProvenanceRecord([], { ...ctx, instruction: 'x'.repeat(2000) });
+    expect(record.instruction).toHaveLength(1000);
   });
 });

@@ -7,6 +7,7 @@ import { useApp } from '../context/app.js';
 import { LintPanel } from './LintPanel.jsx';
 import { DetectionMetadataFields } from './DetectionMetadataFields.jsx';
 import { metadataToForm, formToMetadata } from '../domain/metadataForm.js';
+import { buildProvenanceRecord } from '../domain/proposal.js';
 import { FOCUS_RING } from './a11y.jsx';
 import { Modal } from './Modal.jsx';
 import { AIChatPanel } from './AIChatPanel.jsx';
@@ -32,7 +33,9 @@ const META_WRITE = {
 };
 
 const QueryEditorModal = () => {
-  const { editingQuery, saveQuery, setEditingQuery, aiAvailable = false, schemas = [] } = useApp();
+  const {
+    editingQuery, saveQuery, setEditingQuery, aiAvailable = false, schemas = [], aiModel,
+  } = useApp();
   // The parent mounts this only while the editor is open and keys it on the target query,
   // so the initial state below is derived once per open. The guard further down is a
   // belt-and-braces check; every hook still has to run before it, or React would see a
@@ -55,6 +58,10 @@ const QueryEditorModal = () => {
   // closing it removes a view, not a source of truth, so accepted changes stay in the form.
   const [assistOpen, setAssistOpen] = useState(false);
   const taRef = useRef(null);
+  // Accepted AI proposals and the redaction/instruction facts that go with them,
+  // accumulated across the session and turned into ONE provenance record on save.
+  const acceptedRef = useRef([]);
+  const provenanceMetaRef = useRef({ redaction: 'applied', instruction: '' });
 
   const baseId = useId();
   const ids = {
@@ -123,12 +130,28 @@ const QueryEditorModal = () => {
     if (!form.query.trim()) errs.query = 'A KQL query body is required';
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
     const tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
+
+    // One provenance record per save, appended to whatever the query already carried and
+    // capped at 10 (the API enforces the same cap). It names only what was ACCEPTED —
+    // a proposal the operator rejected leaves no trace here.
+    const existingProvenance = Array.isArray(editingQuery?.aiProvenance) ? editingQuery.aiProvenance : [];
+    const aiProvenance = acceptedRef.current.length > 0
+      ? [...existingProvenance, buildProvenanceRecord(acceptedRef.current, {
+          model: aiModel,
+          generatedAt: new Date().toISOString(),
+          redaction: provenanceMetaRef.current.redaction,
+          instruction: provenanceMetaRef.current.instruction,
+        })].slice(-10)
+      : existingProvenance;
+    acceptedRef.current = [];
+
     saveQuery({
       ...(isNew ? {} : editingQuery),
       name: form.name.trim(), description: form.description.trim(), query: form.query,
       category: form.category, table: form.table, tags,
       favorite: editingQuery.favorite || false, usageCount: editingQuery.usageCount || 0,
       ...formToMetadata(meta),
+      aiProvenance,
     });
     setEditingQuery(null);
   };
@@ -150,8 +173,15 @@ const QueryEditorModal = () => {
   };
 
   // Accepted changes write back through the form's own setters, field by field, so a
-  // hand edit made after a proposal is never clobbered by a stale draft.
-  const applyProposal = (accepted) => {
+  // hand edit made after a proposal is never clobbered by a stale draft. The accepted
+  // changes also accumulate for the save-time provenance record; the meta arg (redaction
+  // state + the operator's instruction) travels with the last proposal of the session.
+  const applyProposal = (accepted, meta) => {
+    acceptedRef.current = [...acceptedRef.current, ...accepted];
+    if (meta) provenanceMetaRef.current = {
+      redaction: meta.redaction === 'overridden' ? 'overridden' : 'applied',
+      instruction: typeof meta.instruction === 'string' ? meta.instruction : '',
+    };
     let nextForm = null;
     let nextMeta = null;
     for (const change of accepted) {

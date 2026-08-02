@@ -84,6 +84,19 @@ for (const [column, definition] of LINEAGE_COLUMNS) {
   }
 }
 
+// AI provenance. A bounded record of what a model authored AND the operator accepted
+// during an AI-assisted session — see the design's data-model section. Stored as JSON,
+// parsed defensively on read, and deliberately NOT spread into the detection block:
+// it must never reach the Sentinel/Navigator exports, which are the v4 metadata
+// document. Cap of ten is enforced at validation time (api/validate.js), keeping the
+// column itself an unopinionated JSON text.
+const hasProvenance = db
+  .prepare("SELECT COUNT(*) AS n FROM pragma_table_info('queries') WHERE name = 'ai_provenance'")
+  .get().n > 0;
+if (!hasProvenance) {
+  db.prepare("ALTER TABLE queries ADD COLUMN ai_provenance TEXT NOT NULL DEFAULT '[]'").run();
+}
+
 // Table schemas. Independent of `queries` by design: this is reference data about the
 // tables a query reads from, not part of a query record, and nothing joins the two.
 db.prepare(`

@@ -14,7 +14,7 @@
 // prose and travel as typed; the operational detail that matters — the query — is
 // redacted. A credential anywhere is refused by the server with no override.
 // ---------------------------------------------------------------------------
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { X, Send, Terminal } from 'lucide-react';
 import { StorageAdapter } from '../storage/adapter.js';
 import { reviewProposal } from '../domain/proposal.js';
@@ -34,6 +34,9 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
   const [review, setReview] = useState(null);
   // Incremented per proposal so ProposalReview remounts (its checkbox state resets).
   const [proposalSeq, setProposalSeq] = useState(0);
+  // Whether any send in this session used the verbatim override, and the operator's last
+  // instruction — both travel with the accepted proposal for the provenance record.
+  const overrideRef = useRef(false);
 
   const draftFields = () => ({
     name: draft?.name || '',
@@ -64,6 +67,7 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
     setGate(null);
     setError(null);
     setReview(null);
+    if (verbatim) overrideRef.current = true;
     const userMsg = { role: 'user', content: input.trim() };
     const history = [...messages, userMsg];
     setMessages(history);
@@ -192,7 +196,17 @@ const AIChatPanel = ({ draft, schemas, onProposal, onClose }) => {
           <ProposalReview
             key={proposalSeq}
             changes={review}
-            onAccept={(accepted) => { onProposal(accepted); setReview(null); }}
+            onAccept={(accepted) => {
+              // The provenance record is built at SAVE time by the editor; the panel
+              // reports the facts it knows — whether redaction was overridden and what
+              // the operator last asked for — alongside the accepted changes.
+              const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+              onProposal(accepted, {
+                redaction: overrideRef.current ? 'overridden' : 'applied',
+                instruction: lastUser?.content || '',
+              });
+              setReview(null);
+            }}
             onReject={() => setReview(null)}
           />
         </div>

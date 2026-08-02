@@ -265,7 +265,9 @@ const StorageAdapter = {
       if (!res.ok) return false;
       const data = await res.json();
       operationLog.add({ type: 'API_AI_HEALTH', key: 'health', success: true, latencyMs: 0 });
-      return data && data.status === 'ok';
+      // The full body, not just a boolean: the caller needs the model name for the
+      // provenance record, and false covers "unreachable" and "not ok" alike.
+      return data && data.status === 'ok' ? data : false;
     } catch {
       return false;
     }

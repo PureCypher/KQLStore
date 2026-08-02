@@ -64,3 +64,21 @@ export function reviewProposal(draft, proposed) {
   }
   return out;
 }
+
+/**
+ * One provenance entry for a save.
+ *
+ * `fields` lists what the operator ACCEPTED, never what the model proposed. A rejected
+ * rewrite must not leave a record claiming a model authored the detection logic — that is
+ * worse than no audit trail, because it is a trail that lies. The instruction is the
+ * operator's own prompt, truncated like the API truncates it (never rejected).
+ */
+export function buildProvenanceRecord(accepted, { model, generatedAt, redaction, instruction }) {
+  return {
+    model,
+    generatedAt,
+    redaction,
+    instruction: String(instruction || '').slice(0, 1000),
+    fields: accepted.map((c) => c.field),
+  };
+}

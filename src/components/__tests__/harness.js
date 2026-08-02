@@ -76,6 +76,7 @@ function makeAppValue(overrides = {}) {
     // toggle visibility; schemas are the assistant's reference data.
     aiAvailable: false,
     schemas: [],
+    aiModel: 'deepseek-v4-flash:cloud',
     ...overrides,
   };
 }

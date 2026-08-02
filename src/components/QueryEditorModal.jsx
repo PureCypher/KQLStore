@@ -211,7 +211,7 @@ const QueryEditorModal = () => {
       labelledBy={ids.title}
       onClose={() => setEditingQuery(null)}
       backdropClassName="z-[80] items-start justify-center pt-8 pb-8 overflow-y-auto"
-      className={`rounded-xl p-6 font-mono w-full ${assistOpen ? 'max-w-5xl' : 'max-w-2xl'} mx-4`}
+      className={`rounded-xl p-6 font-mono w-full ${assistOpen ? 'max-w-6xl' : 'max-w-2xl'} mx-4`}
       style={{ background: '#12121a', border: '1px solid #2a2a3e' }}
     >
       <div className="flex justify-between items-center mb-5">
@@ -319,7 +319,7 @@ const QueryEditorModal = () => {
           <DetectionMetadataFields value={meta} onChange={setMeta} />
         </div>
         {assistOpen && (
-          <div className="w-80 shrink-0 min-w-0" style={{ borderLeft: '1px solid #1e1e2e' }}>
+          <div className="w-96 shrink-0 min-w-0" style={{ borderLeft: '1px solid #1e1e2e' }}>
             {/* The panel shares the draft; it reports accepted changes through onProposal
                 and the form owns them. Unmounting it on close discards the conversation —
                 the accepted fields are already in the form. */}

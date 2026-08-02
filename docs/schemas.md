@@ -76,6 +76,25 @@ next line (how KQL is commonly formatted when the pipe starts a new line). In th
 table name on the line above the bare `| getschema` is discarded along with it — otherwise it would
 be read as a phantom column named after the table.
 
+## Bulk-filling the store: `scripts/fetch-schemas.js`
+
+Pasting `getschema` output covers the table in front of you; it cannot cover tables the
+workspace you can reach does not have (the public LADemo workspace is missing most Sentinel
+and Defender tables). For that there is a scraper:
+
+```console
+$ node scripts/fetch-schemas.js            # writes ./table-schemas.json (gitignored)
+```
+
+It sparse-clones the two MicrosoftDocs repos behind learn.microsoft.com's table references,
+parses every Log Analytics table categorised **Security** (plus everything in
+`SENTINEL_TABLES`) and every Defender XDR Advanced Hunting table, and writes the bare
+`{name, columns, notes}` array the **Import** button above accepts — so the importer's
+new-vs-overwrite preview stays the review gate, and re-running it later picks up Microsoft's
+schema changes. Where a table exists in both sources (the `Device*`, `Email*`, `Identity*`
+families), the Defender XDR shape wins and the notes say so. Design:
+[the scraper spec](superpowers/specs/2026-08-02-table-schema-scraper-design.md).
+
 ## Why `notes` matters: the things `getschema` cannot tell you
 
 A column list is a fact about the schema *right now*. It cannot capture the operational knowledge

@@ -319,7 +319,7 @@ const QueryEditorModal = () => {
           <DetectionMetadataFields value={meta} onChange={setMeta} />
         </div>
         {assistOpen && (
-          <div className="w-96 shrink-0 min-w-0" style={{ borderLeft: '1px solid #1e1e2e' }}>
+          <div className="w-[28rem] shrink-0 min-w-0" style={{ borderLeft: '1px solid #1e1e2e' }}>
             {/* The panel shares the draft; it reports accepted changes through onProposal
                 and the form owns them. Unmounting it on close discards the conversation —
                 the accepted fields are already in the form. */}

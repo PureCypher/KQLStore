@@ -66,10 +66,16 @@ const RedactionPreview = ({ applied, blocked, secrets, onConfirm, onOverride, on
       ) : (
         <>
           {/* The override is the escape hatch the design grants for benign queries, named
-              for exactly what it does — it is never the default path. */}
-          <button type="button" onClick={onOverride}
-            className={`px-3 py-1.5 rounded-lg text-xs text-gray-300 hover:text-gray-100 hover:bg-white/5 ${FOCUS_RING}`}
-            style={{ border: '1px solid #2a2a3e' }}>Send verbatim</button>
+              for exactly what it does — it is never the default path. It is offered only
+              when there is something to override: with an empty list both buttons send an
+              identical payload, but the override also stamps the session's provenance as
+              `redaction: "overridden"` — an audit trail claiming a bypass that never
+              happened, which is worse than no trail at all. */}
+          {applied.length > 0 && (
+            <button type="button" onClick={onOverride}
+              className={`px-3 py-1.5 rounded-lg text-xs text-gray-300 hover:text-gray-100 hover:bg-white/5 ${FOCUS_RING}`}
+              style={{ border: '1px solid #2a2a3e' }}>Send verbatim</button>
+          )}
           <button type="button" onClick={onConfirm}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold ${FOCUS_RING}`}
             style={{ background: '#00ff88', color: '#0a0a0f' }}>

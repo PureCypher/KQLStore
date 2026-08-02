@@ -211,7 +211,7 @@ const QueryEditorModal = () => {
       labelledBy={ids.title}
       onClose={() => setEditingQuery(null)}
       backdropClassName="z-[80] items-start justify-center pt-8 pb-8 overflow-y-auto"
-      className={`rounded-xl p-6 font-mono w-full ${assistOpen ? 'max-w-6xl' : 'max-w-2xl'} mx-4`}
+      className={`rounded-xl p-6 font-mono w-full ${assistOpen ? 'max-w-6xl' : 'max-w-3xl'} mx-4`}
       style={{ background: '#12121a', border: '1px solid #2a2a3e' }}
     >
       <div className="flex justify-between items-center mb-5">

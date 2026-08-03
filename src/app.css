@@ -50,4 +50,18 @@
   ::placeholder {
     color: var(--color-gray-400);
   }
+
+  /* 3. The app shell is a fixed-viewport layout — `h-screen` with `overflow-hidden`, and
+        every pane (sidebar, query list, schema list) scrolls itself. Nothing constrained
+        the root, though, so the viewport kept a scrollbar of its own: measured at 1440px
+        wide, the document reported 20 834px of scrollable height while every box in the
+        tree measured exactly 900px, and dragging that bar scrolled the whole application
+        off-screen beside the list's own bar. Containing the root removes it. The editor's
+        modal is `position: fixed` and scrolls its own backdrop, so it is unaffected —
+        verified against the deployed build. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
 }

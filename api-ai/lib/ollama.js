@@ -37,6 +37,14 @@ const PROPOSE_TOOL = {
           type: 'string',
           description: 'The primary table the query reads from, exactly as it is spelled in KQL — for example SigninLogs, DeviceProcessEvents. Use Custom only when the table is not one of the known Sentinel or Defender tables.',
         },
+        // Enumerated rather than free text: the SPA validates against this exact
+        // vocabulary, so anything else comes back pre-rejected at the review gate.
+        // Kept in step with CATEGORIES in src/constants.js.
+        category: {
+          type: 'string',
+          enum: ['Detection', 'Hunting', 'Investigation', 'Monitoring', 'Reporting', 'Enrichment', 'Utility'],
+          description: 'What the query is for: Detection for alerting logic, Hunting for exploratory analysis, Investigation for pivoting on a known incident, Monitoring for health and coverage, Reporting for summaries, Enrichment for lookups feeding other queries, Utility for everything else.',
+        },
         tags: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['Informational', 'Low', 'Medium', 'High', 'Critical'] },
         attack: {
@@ -96,9 +104,11 @@ function systemPrompt(schemas, knownTables = []) {
     '- Detect password spraying against numerous accounts from one source.',
     '- Identify brute-force attempts against a small number of accounts.',
     '',
-    'Two fields are easy to leave behind and should not be. Whenever you propose or rewrite a',
+    'Three fields are easy to leave behind and should not be. Whenever you propose or rewrite a',
     'query, also set `table` to the primary table the query reads from, spelled exactly as it',
-    'appears in the KQL — the editor defaults it to Custom and only you can correct that. And',
+    'appears in the KQL — the editor defaults it to Custom and only you can correct that. Set',
+    '`category` to what the query is actually for; the editor defaults it to Utility, which is',
+    'rarely right for a detection or a hunt. And',
     'propose `falsePositives`: at least two concrete benign situations that would trigger this',
     'detection, each naming the activity rather than saying "legitimate use" — a maintenance',
     'window, a vulnerability scanner, a shared NAT egress address, a service account with an',

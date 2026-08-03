@@ -130,6 +130,17 @@ test('the propose_query tool lets the model set the table', async () => {
   assert.match(props.table.description, /primary table/i);
 });
 
+test('the propose_query tool constrains category to the app vocabulary', async () => {
+  // Same defect the table had: proposable in the SPA, absent from the tool schema, so a
+  // new query kept the editor's 'Utility' default. An enum keeps the validator happy.
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const category = upstream.lastRequest.body.tools[0].function.parameters.properties.category;
+  assert.ok(category, 'category is not proposable');
+  assert.deepStrictEqual(category.enum,
+    ['Detection', 'Hunting', 'Investigation', 'Monitoring', 'Reporting', 'Enrichment', 'Utility']);
+});
+
 test('the system prompt asks for the table and for false positives', async () => {
   upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
   await chat(baseBody);

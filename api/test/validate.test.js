@@ -182,3 +182,17 @@ test('parentName alone (no parentId in the payload at all) is still accepted', (
   const out = validateQueryPayload({ parentName: 'Stale label' }, { partial: true });
   assert.strictEqual(out.parentName, 'Stale label');
 });
+
+test('the description bound matches the SPA, which has always allowed 10 000 characters', () => {
+  // These bounds were retrofitted in f29873c when mutations moved behind the API, at 1 000
+  // characters — a tenth of what src/domain/validate.js allows and less than the stored data
+  // already contained. The mismatch made every long-described query unsaveable: incrementing
+  // usageCount on copy became a 400, and the SPA fell back to localStorage-only.
+  assert.strictEqual(LIMITS.description, 10000);
+  const long = 'x'.repeat(3031); // the longest description in the live store
+  assert.strictEqual(validateQueryPayload({ name: 'n', query: 'q', description: long }).description, long);
+  assert.throws(
+    () => validateQueryPayload({ name: 'n', query: 'q', description: 'x'.repeat(LIMITS.description + 1) }),
+    /"description" exceeds 10000 characters/,
+  );
+});

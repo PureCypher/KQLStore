@@ -23,7 +23,12 @@ const CATEGORIES = [
 const LIMITS = {
   name: 200,
   query: 50000,
-  description: 1000,
+  // Matches src/domain/validate.js, which has always allowed 10 000. These API bounds were
+  // retrofitted at 1 000 and the store already held descriptions three times that, so every
+  // long-described query became unsaveable — including through paths the operator never
+  // thinks of as a save, like the usageCount bump that copying a query performs. The SPA
+  // then reported "stored locally only", which is data loss waiting for a cleared cache.
+  description: 10000,
   table: 200,
   tagLength: 50,
   tagCount: 20,

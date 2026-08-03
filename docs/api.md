@@ -76,7 +76,7 @@ Bounds, all from `api/validate.js`:
 | --- | --- |
 | `name` | 200 characters, required, non-empty |
 | `query` | 50 000 characters, required, non-empty |
-| `description` | 1 000 characters |
+| `description` | 10 000 characters (matches the SPA; see the note below) |
 | `table` (or `table_name`) | 200 characters |
 | `category` | one of Detection, Hunting, Investigation, Monitoring, Reporting, Enrichment, Utility |
 | `tags` | 20 entries, 50 characters each |
@@ -87,6 +87,13 @@ Bounds, all from `api/validate.js`:
 | `created` / `updated` | 64 characters |
 | import batch | 1 000 items |
 | `?limit=` | 1 000 |
+
+`description` matches `src/domain/validate.js` deliberately. It was 1 000 here for a while —
+retrofitted with the rest of these bounds when mutations moved behind the API, at a tenth of
+what the SPA allowed and less than the store already held. The result was a query that could
+be read but never written: **incrementing `usageCount`, which copying a query does silently,
+came back 400 and the SPA fell back to "stored locally only"**. A bound that the existing data
+violates is a bug, not a safeguard — if either limit changes, change both.
 
 A rejected payload comes back as HTTP 400 naming the field:
 

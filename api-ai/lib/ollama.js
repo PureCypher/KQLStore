@@ -31,6 +31,12 @@ const PROPOSE_TOOL = {
           description: 'A prose summary of what the query detects and how, then a blank line, then a line reading exactly "Use Case:" followed by one "- " bullet per use case.',
         },
         query: { type: 'string' },
+        // Absent until now, which is why a new query kept the editor's 'Custom' default
+        // however plainly its KQL read from a known table: the field was unproposable.
+        table: {
+          type: 'string',
+          description: 'The primary table the query reads from, exactly as it is spelled in KQL — for example SigninLogs, DeviceProcessEvents. Use Custom only when the table is not one of the known Sentinel or Defender tables.',
+        },
         tags: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['Informational', 'Low', 'Medium', 'High', 'Critical'] },
         attack: {
@@ -89,6 +95,14 @@ function systemPrompt(schemas, knownTables = []) {
     'Use Case:',
     '- Detect password spraying against numerous accounts from one source.',
     '- Identify brute-force attempts against a small number of accounts.',
+    '',
+    'Two fields are easy to leave behind and should not be. Whenever you propose or rewrite a',
+    'query, also set `table` to the primary table the query reads from, spelled exactly as it',
+    'appears in the KQL — the editor defaults it to Custom and only you can correct that. And',
+    'propose `falsePositives`: at least two concrete benign situations that would trigger this',
+    'detection, each naming the activity rather than saying "legitimate use" — a maintenance',
+    'window, a vulnerability scanner, a shared NAT egress address, a service account with an',
+    'expired password. They are what makes a detection tunable by whoever inherits it.',
     '',
     KQL_BEST_PRACTICES,
     '',

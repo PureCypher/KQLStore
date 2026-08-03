@@ -120,6 +120,24 @@ test('the system prompt states the library house style for a description', async
   assert.match(system, /description/i);
 });
 
+test('the propose_query tool lets the model set the table', async () => {
+  // Without this the field is unproposable, so a new query keeps the editor's 'Custom'
+  // default however plainly the KQL reads from SigninLogs.
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const props = upstream.lastRequest.body.tools[0].function.parameters.properties;
+  assert.ok(props.table, 'table is not proposable');
+  assert.match(props.table.description, /primary table/i);
+});
+
+test('the system prompt asks for the table and for false positives', async () => {
+  upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
+  await chat(baseBody);
+  const system = upstream.lastRequest.body.messages[0].content;
+  assert.match(system, /table the query reads from/i, 'no table instruction');
+  assert.match(system, /falsePositives/, 'no false-positive instruction');
+});
+
 test('the propose_query tool describes the description format too', async () => {
   upstream.reply = JSON.stringify({ message: { content: 'ok' }, done: true }) + '\n';
   await chat(baseBody);

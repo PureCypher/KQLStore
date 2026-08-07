@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 }
+  },
+  "legacy": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "legacy"
+  },
+  "think-off": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 },
+    "think": false
+  },
+  "no-known-tables": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 },
+    "knownTablesCap": 0
+  },
+  "m-deepseek-pro": {
+    "model": "deepseek-v4-pro",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 }
+  },
+  "m-kimi-code": {
+    "model": "kimi-k2.7-code",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 }
+  },
+  "m-qwen": {
+    "model": "qwen3.5:397b",
+    "variant": "baseline",
+    "options": { "temperature": 0.2 }
+  }
+}

@@ -34,6 +34,13 @@ Three properties do the work, and each is a deliberate trade:
   lives in the SPA's React state and is replayed each turn, so there is nothing on the AI service to
   back up and nothing to leak.
 
+Two turn shapes the upstream produces are handled so the panel never renders a silently blank
+turn: a stream that dies before yielding anything usable is retried once (then becomes the fixed
+error message), and a proposal that arrives without any explanation text is prefixed with a fixed
+notice line. Requests are sent at low temperature. The prompt's worked example, rule checklist and
+pre-proposal self-check — and the measurements behind all of these choices — are documented in
+[the quality-gap investigation](superpowers/specs/2026-08-06-ai-assist-quality-gap.md).
+
 ## What is sent, and what is not
 
 **Sent:** the query's `name`, `description` and `query`, redacted by default (see below); the

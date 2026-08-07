@@ -5,7 +5,11 @@
 // (422 — the override covers disclosures, never secrets); redact the draft unless
 // allowVerbatim; forward to Ollama Cloud as a streaming chat with the propose_query
 // tool; relay text chunks as NDJSON; on the final event, un-redact the tool-call
-// arguments and emit them as a proposal.
+// arguments and emit them as a proposal. Two turn shapes that used to render blank
+// are handled: a turn that produced nothing usable (cut stream, empty done, or
+// unparseable tool arguments) is retried once and then becomes the fixed error
+// line, and a proposal arriving with no message text gets a fixed notice line
+// ahead of it.
 //
 // Two things never happen here:
 //   * The OLLAMA_API_KEY never appears in a response, a log line, or an error
@@ -21,6 +25,18 @@ const { OLLAMA_URL, PROPOSE_TOOL, systemPrompt } = require('../lib/ollama');
 const router = Router();
 
 const MODEL = () => process.env.OLLAMA_MODEL || 'deepseek-v4-flash:cloud';
+
+// Measured in the 2026-08 eval (docs/superpowers/specs/2026-08-06-ai-assist-quality-gap.md):
+// a low temperature was mildly positive on every dimension — fewer fabricated
+// columns, better house-style compliance, less latency — and negative on none.
+const TEMPERATURE = 0.2;
+
+// Ollama Cloud sometimes terminates the stream right after the model's thinking
+// phase: no content, no tool call, and no done event (3.4% of eval runs; the
+// captured thinking of such runs holds a fully-formed answer the transport
+// lost). One retry recovers those turns; anything past nothing-at-all cannot be
+// retried because text already reached the client.
+const UPSTREAM_ATTEMPTS = 2;
 
 /** Recursively substitute markers for originals in every string of a parsed object. */
 function unredactDeep(value, applied) {
@@ -119,53 +135,108 @@ router.post('/', async (req, res, next) => {
     };
     const upstreamMessages = [system, ...messages, draftMessage];
 
-    const upstream = await fetch(OLLAMA_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: MODEL(),
-        messages: upstreamMessages,
-        tools: [PROPOSE_TOOL],
-        stream: true,
-      }),
+    const requestBody = JSON.stringify({
+      model: MODEL(),
+      messages: upstreamMessages,
+      tools: [PROPOSE_TOOL],
+      stream: true,
+      options: { temperature: TEMPERATURE },
     });
 
-    if (!upstream.ok || !upstream.body) {
-      // Never relay the upstream body: it can echo the request, and the request contains
-      // query text. The fixed string is all the caller needs.
-      return res.json({ type: 'error', value: 'The model service failed.' });
-    }
-
-    res.setHeader('Content-Type', 'application/x-ndjson');
-
-    const toolCalls = [];
-    for await (const evt of readEvents(upstream.body)) {
-      const content = evt?.message?.content;
-      if (typeof content === 'string' && content) {
-        res.write(JSON.stringify({ type: 'text', value: content }) + '\n');
-      }
-      if (Array.isArray(evt?.message?.tool_calls)) {
-        for (const call of evt.message.tool_calls) {
-          if (call?.function?.arguments) toolCalls.push(call.function.arguments);
-        }
-      }
-      if (evt?.done) break;
-    }
-
-    // Ollama serialises tool-call arguments as JSON strings; tolerate an object in case
-    // a future version stops doing that.
-    const proposals = toolCalls.map((args) => {
+    // Ollama serialises tool-call arguments as JSON strings; tolerate an object in
+    // case a future version stops doing that. Null means the call is unusable.
+    const parseArgs = (args) => {
       let parsed = args;
       if (typeof args === 'string') {
         try { parsed = JSON.parse(args); } catch { return null; }
       }
-      return parsed && typeof parsed === 'object' ? unredactDeep(parsed, applied) : null;
-    }).filter(Boolean);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    };
+
+    /** One upstream pass: relay text chunks as they arrive, collect parsed proposals. */
+    const consume = async (body) => {
+      const out = { wroteText: false, proposals: [] };
+      for await (const evt of readEvents(body)) {
+        const content = evt?.message?.content;
+        if (typeof content === 'string' && content) {
+          res.write(JSON.stringify({ type: 'text', value: content }) + '\n');
+          out.wroteText = true;
+        }
+        if (Array.isArray(evt?.message?.tool_calls)) {
+          for (const call of evt.message.tool_calls) {
+            const parsed = call?.function?.arguments != null ? parseArgs(call.function.arguments) : null;
+            if (parsed) out.proposals.push(parsed);
+          }
+        }
+        if (evt?.done) break;
+      }
+      return out;
+    };
+
+    // Nothing usable reached the client: no text relayed, no parseable proposal.
+    // That covers the abnormal cut (stream ends with no done event), a clean done
+    // with an empty message, and tool calls whose arguments failed to parse — all
+    // render as a blank turn, none has sent a byte, so all are safe to retry
+    // exactly once. A stream that died AFTER text streamed is never retried: the
+    // client already rendered that text, and a second pass would duplicate it.
+    const nothingUsable = (r) => !r.wroteText && r.proposals.length === 0;
+
+    let result = null;
+    for (let attempt = 1; attempt <= UPSTREAM_ATTEMPTS; attempt += 1) {
+      let upstream;
+      try {
+        upstream = await fetch(OLLAMA_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: requestBody,
+        });
+      } catch (err) {
+        // On attempt 1 no header is set yet, so the generic handler can still
+        // answer as plain JSON. On the retry the NDJSON header is already set —
+        // rethrowing would ship app.js's JSON 500 mislabeled as x-ndjson, so fall
+        // through to the fixed stream line instead.
+        if (attempt === 1) throw err;
+        break;
+      }
+
+      if (!upstream.ok || !upstream.body) {
+        // Never relay the upstream body: it can echo the request, and the request
+        // contains query text. The fixed string is all the caller needs. On a
+        // failed retry the NDJSON header is already set, so the same fixed string
+        // goes out as a stream line below instead.
+        if (attempt === 1) return res.json({ type: 'error', value: 'The model service failed.' });
+        break;
+      }
+
+      if (attempt === 1) res.setHeader('Content-Type', 'application/x-ndjson');
+      result = await consume(upstream.body);
+      if (!nothingUsable(result)) break;
+    }
+
+    if (!result || nothingUsable(result)) {
+      // Both attempts produced nothing usable. The fixed error line replaces what
+      // used to be a silently blank turn.
+      res.write(JSON.stringify({ type: 'error', value: 'The model service failed.' }) + '\n');
+      res.end();
+      return;
+    }
+
+    const proposals = result.proposals.map((p) => unredactDeep(p, applied));
 
     if (proposals.length > 0) {
+      if (!result.wroteText) {
+        // The model routinely answers with a tool call and no message text — its
+        // reasoning stays in the thinking channel, which this route does not
+        // relay (it is verbose and bypasses the redaction-reviewed message
+        // path). A fixed notice keeps the turn honest instead of blank. Known
+        // trade: the SPA stores this line as assistant history and replays it on
+        // later turns; the fixed wording is safe to replay, and the alternative
+        // is a proposal card appearing out of nowhere.
+        res.write(JSON.stringify({ type: 'text', value: 'Proposal attached — the model sent no explanation this turn.' }) + '\n');
+      }
       res.write(JSON.stringify({ type: 'proposal', fields: proposals[0] }) + '\n');
     }
     res.end();

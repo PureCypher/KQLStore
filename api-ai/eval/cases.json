@@ -1,0 +1,139 @@
+[
+  {
+    "id": "new-detection-spray",
+    "kind": "new-detection",
+    "instruction": "Write a password spray detection: one source IP failing sign-ins against many distinct accounts in a short window. I want the list of targeted accounts and the counts, and make the thresholds tunable.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["SigninLogs"],
+    "expectations": {
+      "focus": ["best-practices", "event-time-split", "house-style", "metadata"],
+      "notes": "From-scratch generation. Excellent: let-bound thresholds; range filter on TimeGenerated (indexed) FIRST; ResultType != 0 (or != \"0\") for failures; summarize dcount(UserPrincipalName) + make_set by IPAddress; CreatedDateTime preferred for analysis/output where used; table=SigninLogs, category=Detection, falsePositives with 2+ concrete scenarios (shared NAT/proxy egress, vulnerability scanner, password expiry wave), attack tactic credential-access / T1110.003. Description must be prose + blank line + 'Use Case:' + '- ' bullets."
+    }
+  },
+  {
+    "id": "grounding-ztsgraph",
+    "kind": "new-detection",
+    "instruction": "Using the ZTSGraph table, write a hunt for workloads that start talking to remote identifiers they have not contacted in the prior 14 days. Compare the last 24 hours against that baseline and show bytes in/out and connection counts for the new pairs.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["ZTSGraph"],
+    "expectations": {
+      "focus": ["schema-fidelity", "best-practices"],
+      "notes": "Grounding case: ZTSGraph cannot be known from training; its real columns are LocalIdentifier, RemoteIdentifier, FlowDirection, BytesIn, BytesOut, ConnectionsIn, ConnectionsOut, PacketLastSeenAt, TimeGenerated, LocalIP, RemoteIP, Port, Protocol. Any column not in that list (e.g. SourceWorkload, DestinationService, FlowStartTime) is invented and is a schema-fidelity failure. Excellent: anti-join or leftanti between 24h window and 14d baseline on LocalIdentifier/RemoteIdentifier pair, range filters on TimeGenerated first, materialize() if baseline reused."
+    }
+  },
+  {
+    "id": "rewrite-performance",
+    "kind": "rewrite",
+    "instruction": "This works but it is far too slow over 30 days on a large estate. Optimize it without changing what it catches.",
+    "draft": {
+      "name": "Encoded PowerShell then network activity",
+      "description": "Flags encoded PowerShell commands and joins network events for context.",
+      "query": "DeviceProcessEvents\n| extend cmd = tolower(ProcessCommandLine)\n| where cmd contains \"-enc\" or cmd contains \"frombase64string\"\n| where tolower(InitiatingProcessFileName) =~ \"powershell.exe\" or tolower(InitiatingProcessFileName) =~ \"pwsh.exe\"\n| join kind=inner (DeviceNetworkEvents) on DeviceId\n| where Timestamp > ago(30d)\n| sort by Timestamp desc"
+    },
+    "schemaTables": ["DeviceProcessEvents", "DeviceNetworkEvents"],
+    "expectations": {
+      "focus": ["best-practices", "logic-correctness"],
+      "notes": "Every violation is planted: filter on calculated column (extend cmd then where), contains instead of has, tolower()+=~ double case-folding, join before any time filter with unfiltered right side, join only on DeviceId (row explosion; also makes post-join Timestamp ambiguous — the where after the join actually references the left Timestamp while right side is unbounded), time filter last, no project, unbounded sort. Excellent rewrite: Timestamp range filter first on BOTH sides, where on ProcessCommandLine directly with has/has_cs (case-insensitive base64 caveat: -enc matching needs care; has is term-based — accept has \"-enc\" or contains_cs fallback WITH justification), InitiatingProcessFileName in~ () or == with proper casing, project early, join on DeviceId + time window or rewritten as time-window correlation, note that the join semantics were broken in the original."
+    }
+  },
+  {
+    "id": "adapt-table",
+    "kind": "adapt",
+    "instruction": "Adapt this to catch the same behavior for local and remote logons on endpoints, using DeviceLogonEvents instead.",
+    "draft": {
+      "name": "Sign-in brute force by source IP",
+      "description": "Detects a burst of failed sign-ins from one IP.\n\nUse Case:\n- Catch online password guessing against cloud accounts.",
+      "query": "let window = 10m;\nlet threshold = 25;\nSigninLogs\n| where TimeGenerated > ago(1d)\n| where ResultType != 0\n| summarize Failures = count(), Accounts = dcount(UserPrincipalName), AccountList = make_set(UserPrincipalName, 100) by IPAddress, bin(TimeGenerated, window)\n| where Failures > threshold"
+    },
+    "schemaTables": ["SigninLogs", "DeviceLogonEvents"],
+    "expectations": {
+      "focus": ["schema-fidelity", "column-mapping", "metadata"],
+      "notes": "Correct mapping: TimeGenerated→Timestamp, ResultType != 0→ActionType == \"LogonFailed\" (FailureReason available for detail), UserPrincipalName→AccountUpn or AccountName, IPAddress→RemoteIP. Keeping SigninLogs columns in the new query is a schema-fidelity failure. table must be updated to DeviceLogonEvents. Excellent: also updates name/description to match the endpoint context and keeps let-bound thresholds."
+    }
+  },
+  {
+    "id": "metadata-only",
+    "kind": "metadata",
+    "instruction": "The query is final — do not touch it. Fill in everything else: name, description, table, category, severity, MITRE tactics and techniques, and false positives.",
+    "draft": {
+      "name": "",
+      "description": "",
+      "query": "EmailEvents\n| where Timestamp > ago(7d)\n| where EmailDirection == \"Inbound\"\n| where DeliveryAction == \"Delivered\"\n| where isnotempty(ThreatTypes)\n| summarize Messages = count(), Recipients = dcount(RecipientEmailAddress), FirstSeen = min(Timestamp), LastSeen = max(Timestamp) by SenderFromDomain, ThreatTypes\n| where Messages >= 5\n| order by Messages desc"
+    },
+    "schemaTables": ["EmailEvents"],
+    "expectations": {
+      "focus": ["metadata", "house-style", "tool-discipline"],
+      "notes": "Query field must be ABSENT from the proposal, or byte-identical if present (tool description says only include fields being changed). table=EmailEvents, category=Hunting or Monitoring (Detection defensible), severity Medium-ish, tactics initial-access, techniques T1566 family. falsePositives: 2+ concrete (e.g. bulk mail feed misclassified, phishing simulation campaigns, a newsletter domain tripping ThreatTypes). Description in house style."
+    }
+  },
+  {
+    "id": "redaction-placeholders",
+    "kind": "redacted-rewrite",
+    "instruction": "Also catch connections where the remote port is 8443 or 9001, and add the initiating process name to the output. Keep the device scoping exactly as it is.",
+    "draft": {
+      "name": "Suspicious egress from build servers",
+      "description": "Watches the build farm (owner: infra-ops@acmecorp.com) for unexpected egress to the public internet.",
+      "query": "DeviceNetworkEvents\n| where Timestamp > ago(1d)\n| where DeviceName in (\"buildsrv01.acme.corp\", \"buildsrv02.acme.corp\")\n| where RemoteIPType == \"Public\"\n| where LocalIP != \"10.4.8.15\"\n| summarize ConnCount = count() by DeviceName, RemoteIP, RemotePort"
+    },
+    "schemaTables": ["DeviceNetworkEvents"],
+    "expectations": {
+      "focus": ["placeholder-preservation", "best-practices"],
+      "notes": "The harness redacts before sending: the email, both .corp hostnames and the private IP become typed placeholders like <EMAIL_OR_UPN_1>, <INTERNAL_HOSTNAME_2>. Excellent: placeholders survive VERBATIM in the proposed query/description (system prompt says keep them exactly; never guess). Port extension via in (8443, 9001) folded into the RemoteIPType/port logic without disturbing the DeviceName scoping placeholders; InitiatingProcessFileName added to summarize by-clause or output. Any altered/expanded/dropped placeholder is a failure."
+    }
+  },
+  {
+    "id": "event-time-trap",
+    "kind": "new-detection",
+    "instruction": "I need a timeline of risky interactive sign-ins over the last 7 days, binned hourly by when the sign-in actually happened, with user, app, IP and risk level. Sort it chronologically.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["SigninLogs"],
+    "expectations": {
+      "focus": ["event-time-split", "best-practices"],
+      "notes": "The trap: 'when the sign-in actually happened' pulls toward CreatedDateTime. Correct per the prompt's split rule: RANGE filter stays on TimeGenerated (indexed); bin()/project/sort use CreatedDateTime. Filtering the range on CreatedDateTime defeats the shard index and is the canonical failure. Also: IsInteractive == true, IsRisky or RiskLevelDuringSignIn/RiskLevelAggregated for risk, project early."
+    }
+  },
+  {
+    "id": "join-hygiene",
+    "kind": "new-detection",
+    "instruction": "Correlate: powershell.exe or pwsh.exe process creations followed within 5 minutes by an outbound connection from that same process to a public IP. Show device, account, command line, remote IP and port. Last 3 days. It has to run fast over a big estate.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["DeviceProcessEvents", "DeviceNetworkEvents"],
+    "expectations": {
+      "focus": ["best-practices", "join-hygiene", "logic-correctness"],
+      "notes": "Excellent: both sides range-filtered on Timestamp first, filtered and projected BEFORE the join, join keys DeviceId + InitiatingProcessId (network side ties to the creating process via InitiatingProcess*; process side ProcessId/ProcessCreationTime), time-window condition (network Timestamp between process Timestamp and +5m), smaller side left, RemoteIPType == \"Public\" pushed down, project early, optional hint.shufflekey for scale. Watch for: joining only on DeviceId (explosion), filtering after the join, using FileName instead of InitiatingProcessFileName on the network side."
+    }
+  },
+  {
+    "id": "dynamic-column",
+    "kind": "new-detection",
+    "instruction": "Detect changes to Conditional Access policies — creation, update, deletion. Show when it happened, who did it (user or app), the policy name and the operation. Last 14 days.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["AuditLogs"],
+    "expectations": {
+      "focus": ["dynamic-columns", "best-practices", "event-time-split"],
+      "notes": "AuditLogs: OperationName has \"conditional access\" terms (Add/Update/Delete conditional access policy) or Category == \"Policy\". InitiatedBy and TargetResources are dynamic: excellent output coalesces InitiatedBy.user.userPrincipalName / InitiatedBy.app.displayName, policy name from TargetResources[0].displayName. Per the dynamic-column rule, a rare-value lookup inside a dynamic column should be pre-filtered with `has` before .key access. Range on TimeGenerated; ActivityDateTime is the semantic event time for output/analysis."
+    }
+  },
+  {
+    "id": "absent-column",
+    "kind": "new-detection",
+    "instruction": "Alert when a single account gets Kerberos pre-authentication failures from more than 20 distinct source workstations within 10 minutes. Include the Kerberos sub-status code and the logon process name in the output.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": ["IdentityLogonEvents"],
+    "expectations": {
+      "focus": ["schema-fidelity", "absent-column-honesty"],
+      "notes": "IdentityLogonEvents has ActionType, Protocol (Kerberos), FailureReason, AccountUpn/AccountName, DeviceName, IPAddress — but NO sub-status code column and NO logon process name column. Excellent: builds the dcount(DeviceName) burst detection AND says plainly those two columns do not exist in this table (FailureReason is the nearest available; a Windows SubStatus like 0x18 lives in the on-prem SecurityEvent 4771, not here). Inventing SubStatus/LogonProcessName or shoehorning AdditionalFields keys it cannot know is the failure this case exists to catch."
+    }
+  },
+  {
+    "id": "known-tables-pointer",
+    "kind": "guidance",
+    "instruction": "Which table should I use to hunt for risky OAuth consent grants — users consenting to apps that request broad Graph scopes? Sketch the approach.",
+    "draft": { "name": "", "description": "", "query": "" },
+    "schemaTables": [],
+    "expectations": {
+      "focus": ["tool-discipline", "schema-fidelity", "grounding-behavior"],
+      "notes": "No schemas ride this turn; all 264 tables arrive as bare names. Good behavior: point at CloudAppEvents and/or AuditLogs (consent operations) BY NAME, note that naming the table brings its schema next turn, and avoid asserting specific column names as fact (sketching with clearly-hypothetical columns is acceptable only if flagged). Confidently fabricated columns, or proposing a full query as final against an unseen schema, is the failure. A propose_query call is optional here; message-text guidance alone is acceptable."
+    }
+  }
+]

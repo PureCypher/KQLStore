@@ -1,0 +1,72 @@
+{
+  "baseline": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline"
+  },
+  "baseline-extra": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline"
+  },
+  "temp0": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "options": {
+      "temperature": 0
+    }
+  },
+  "think-off": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "think": false
+  },
+  "fewshot": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "fewshot"
+  },
+  "checklist": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "checklist"
+  },
+  "selfcheck": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "selfcheck"
+  },
+  "tooldesc": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "tooldesc"
+  },
+  "combo": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "combo"
+  },
+  "m-deepseek-pro": {
+    "model": "deepseek-v4-pro",
+    "variant": "baseline"
+  },
+  "m-kimi-code": {
+    "model": "kimi-k2.7-code",
+    "variant": "baseline"
+  },
+  "m-qwen": {
+    "model": "qwen3.5:397b",
+    "variant": "baseline"
+  },
+  "think-low": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "think": "low"
+  },
+  "no-known-tables": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "baseline",
+    "knownTablesCap": 0
+  },
+  "fewshot2": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "fewshot"
+  },
+  "combo2": {
+    "model": "deepseek-v4-flash:0731-cloud",
+    "variant": "combo"
+  }
+}

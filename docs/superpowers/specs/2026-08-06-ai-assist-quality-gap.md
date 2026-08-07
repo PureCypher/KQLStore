@@ -277,6 +277,36 @@ from `lib/variants.js`). Variants: `lib/variants.js`. Judging pipeline: `analysi
 (runs inside a Claude Code session; see its README). Captured results and the
 schema dump are gitignored; the API key never touches the repo.
 
+## 9. Post-deploy confirmation (2026-08-07)
+
+After PR #67 merged and the `kqlstore-ai` image was rebuilt and rolled out, the
+eval was rerun against the shipped configuration: fresh captures of `baseline`
+(the deployed combo prompt + `temperature: 0.2`) and `legacy` (the pre-combo
+prompt), 2 reps × 11 cases each, judged blind against the frontier reference by
+the same pipeline (full 5-output coverage per case, adversarial verification).
+
+| Config | schemaFid | bestPract | validity | logic | discipline | total /15 | wins |
+|---|---|---|---|---|---|---|---|
+| frontier (reference) | 3.00 | 3.00 | 3.00 | 3.00 | 2.91 | **14.91** | 11/11 |
+| shipped (n=22) | 2.86 | 2.36 | 2.86 | 2.05 | 2.64 | **12.77** | 0 |
+| legacy (n=22) | 2.68 | 2.36 | 2.77 | 2.23 | 2.23 | **12.27** | 0 |
+
+Mechanical, shipped vs legacy: tool-call rate **22/22 vs 21/22** — legacy's one
+failure was a live reproduction of the blank-turn mode (no text, no tool call),
+which production now retries; the shipped arm produced zero such turns. Metadata
+22/22 both; house style **19/22 vs 13/21**; zero lost redaction markers and zero
+literal-`\n` in both; one invention each, in the two known residual shapes
+(shipped: one fabricated column on the no-schema case; legacy: `LogonProcessName`
+on the honesty case). Prompt cost as predicted: +612 tokens (+17%).
+
+Caveats stated plainly: the judged delta here (+0.50) is smaller than the
+pre-ship round's (+1.09); individual judge passes swing ±0.35, and this panel
+docked the shipped arm harder on threshold-tuning logic than earlier panels.
+The direction is stable across all four judging rounds — shipped wins fidelity,
+validity, discipline, and reliability; the frontier stays ~2 points clear of
+both, that residue being the hard-case honesty class §6's validator option
+targets if it is ever needed.
+
 ## Sources
 
 - Ollama Cloud subscription/GPU-time model and open-market per-token comparisons:

@@ -1,6 +1,8 @@
 # Closing the KQL-generation gap: deepseek-v4-flash vs frontier (investigation)
 
-**Date:** 2026-08-06/07 · **Status:** findings + recommendations, no production changes
+**Date:** 2026-08-06/07 · **Status:** recommendations 1–3 implemented on this
+branch (combo prompt in `lib/ollama.js`, `temperature: 0.2` + reliability
+hardening in `routes/chat.js`); the text below is the investigation as it stood
 **Serving path under test:** `api-ai/routes/chat.js` → Ollama Cloud, prompt/tool from
 `api-ai/lib/ollama.js` · **Eval harness:** `api-ai/eval/` (rerun instructions in its README)
 
@@ -34,7 +36,7 @@ Three specific failure modes account for the distance, in order of impact:
 
 | # | Change | Type | Expected effect | Cost |
 |---|--------|------|-----------------|------|
-| 1 | Ship the fixed `combo` prompt (few-shot worked example with real newlines + checklist rules + self-check + query-param rules) — `eval/lib/variants.js` is the exact text | prompt-only | measured: 100% tool-call rate, metadata 11/11, house style 10/11, 0 schema-visible inventions, 0 lost markers, ~2× faster than baseline | +~610 prompt tokens/turn (~+17%) |
+| 1 | Ship the fixed `combo` prompt (few-shot worked example with real newlines + checklist rules + self-check + query-param rules) — now the live text in `api-ai/lib/ollama.js` | prompt-only | measured: 100% tool-call rate, metadata 11/11, house style 10/11, 0 schema-visible inventions, 0 lost markers, ~2× faster than baseline | +~610 prompt tokens/turn (~+17%) |
 | 2 | Add `options: { temperature: 0.2 }` in `chat.js` | one line | small free gain: judges +0.4 total, house style 18/20 vs 14/20, −18% latency, fewer fabrications | none |
 | 3 | Harden the serving path: retry once when the stream ends with no content, no tool call and no `done` event; emit a fixed one-line notice when a proposal arrives with empty text | ~20 lines in `chat.js` | removes the blank-turn mode (3.4%) and makes silent proposals honest; the only fix for these — prompts demonstrably cannot reach them | none at runtime |
 | 4 | Keep `deepseek-v4-flash`; do not swap | — | see §5 — `deepseek-v4-pro` judged best of the alternatives (+1.7 vs baseline) but regresses tool discipline, is the heaviest silent-proposer (3/11 with text), mangled a redaction marker, and burns the subscription's GPU-time quota ~10× faster; the combo prompt on flash reaches similar judged territory for free | — |
@@ -268,8 +270,10 @@ OLLAMA_API_KEY_FILE=/tmp/.ollama_key node run.js --config combo2 --repeat 2
 node summary.js
 ```
 
-Configs: `configs.json` (note `fewshot2`/`combo2` are the fixed-example arms —
-the ones to trust). Variants: `lib/variants.js`. Judging pipeline: `analysis/`
+Configs: `configs.json`. Since the recommendations landed, `baseline` IS the
+shipped combo shape and `legacy` reconstructs the pre-combo prompt (the
+single-lever arms this report cites were merged into production and removed
+from `lib/variants.js`). Variants: `lib/variants.js`. Judging pipeline: `analysis/`
 (runs inside a Claude Code session; see its README). Captured results and the
 schema dump are gitignored; the API key never touches the repo.
 

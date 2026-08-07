@@ -8,9 +8,16 @@ request options and prompt variants, against a fixed case set. Built for the
 The harness is faithful to `api-ai/routes/chat.js`: same message construction,
 same draft redaction (`lib/fields.js`), the live `PROPOSE_TOOL` and
 `systemPrompt()` from `lib/ollama.js`, `stream: true`, and the same NDJSON event
-decode. Prompt variants are marker-spliced edits of the live prompt so each
-config differs from baseline by exactly one lever (the splice throws if
-`systemPrompt()` changes shape).
+decode. Prompt variants are marker-spliced edits of the live prompt (the splice
+throws if `systemPrompt()` changes shape).
+
+Since the investigation's recommendations landed, **the production prompt is the
+measured combo shape**, so `baseline` here means "what production sends today"
+(including `temperature: 0.2`, which `routes/chat.js` now sets). The `legacy`
+variant reconstructs the pre-combo prompt for old-vs-new comparisons. The
+historical single-lever arms (fewshot/checklist/selfcheck/tooldesc/combo) were
+merged into production and removed from `lib/variants.js`; their numbers live in
+the investigation report.
 
 ## Setup
 

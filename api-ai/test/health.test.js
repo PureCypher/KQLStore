@@ -22,12 +22,12 @@ test.before(async () => {
 test.after(() => new Promise((r) => server.close(r)));
 
 test('health reports the configured model', async () => {
-  process.env.OLLAMA_MODEL = 'deepseek-v4-flash:cloud';
+  process.env.OLLAMA_MODEL = 'gemma4:31b-cloud';
   const res = await fetch(`${base}/api/ai/health`);
   assert.strictEqual(res.status, 200);
   const body = await res.json();
   assert.strictEqual(body.status, 'ok');
-  assert.strictEqual(body.model, 'deepseek-v4-flash:cloud');
+  assert.strictEqual(body.model, 'gemma4:31b-cloud');
 });
 
 test('health reports whether a key is present without revealing it', async () => {

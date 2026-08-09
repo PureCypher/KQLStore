@@ -24,7 +24,7 @@ const { OLLAMA_URL, PROPOSE_TOOL, systemPrompt } = require('../lib/ollama');
 
 const router = Router();
 
-const MODEL = () => process.env.OLLAMA_MODEL || 'deepseek-v4-flash:cloud';
+const MODEL = () => process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
 
 // Measured in the 2026-08 eval (docs/superpowers/specs/2026-08-06-ai-assist-quality-gap.md):
 // a low temperature was mildly positive on every dimension — fewer fabricated

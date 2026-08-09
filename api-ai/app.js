@@ -20,7 +20,7 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 
-const MODEL = () => process.env.OLLAMA_MODEL || 'deepseek-v4-flash:cloud';
+const MODEL = () => process.env.OLLAMA_MODEL || 'gemma4:31b-cloud';
 
 app.get('/api/ai/health', (_req, res) => {
   res.json({

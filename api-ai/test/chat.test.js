@@ -76,7 +76,7 @@ test('sends the configured model and a bearer token', async () => {
   upstream.reply = JSON.stringify({ message: { content: 'done' }, done: true }) + '\n';
   await chat(baseBody);
   assert.match(upstream.lastRequest.url, /ollama\.com/);
-  assert.strictEqual(upstream.lastRequest.body.model, 'deepseek-v4-flash:cloud');
+  assert.strictEqual(upstream.lastRequest.body.model, 'gemma4:31b-cloud');
   assert.strictEqual(upstream.lastRequest.init.headers.Authorization, 'Bearer test-key');
 });
 

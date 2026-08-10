@@ -19,7 +19,7 @@ const knownTables = allNames.filter((n) => !kase.schemaTables.includes(n)).slice
 const { redacted } = redactFields(kase.draft);
 const { system, tool } = buildVariant('baseline', schemas, knownTables);
 const payload = {
-  model: 'deepseek-v4-flash:0731-cloud',
+  model: 'gemma4:31b-cloud',
   messages: [
     { role: 'system', content: system },
     { role: 'user', content: kase.instruction },

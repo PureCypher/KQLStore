@@ -1,21 +1,21 @@
 {
   "baseline": {
-    "model": "deepseek-v4-flash:0731-cloud",
+    "model": "gemma4:31b-cloud",
     "variant": "baseline",
     "options": { "temperature": 0.2 }
   },
   "legacy": {
-    "model": "deepseek-v4-flash:0731-cloud",
+    "model": "gemma4:31b-cloud",
     "variant": "legacy"
   },
   "think-off": {
-    "model": "deepseek-v4-flash:0731-cloud",
+    "model": "gemma4:31b-cloud",
     "variant": "baseline",
     "options": { "temperature": 0.2 },
     "think": false
   },
   "no-known-tables": {
-    "model": "deepseek-v4-flash:0731-cloud",
+    "model": "gemma4:31b-cloud",
     "variant": "baseline",
     "options": { "temperature": 0.2 },
     "knownTablesCap": 0
